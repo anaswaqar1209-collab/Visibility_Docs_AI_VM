@@ -85,18 +85,7 @@ class DocumentService:
                     SupabaseDB.delete_file("documents", filename)
                 except Exception:
                     pass
-        SupabaseDB.delete("documents", "id", document_id)
-        try:
-            SupabaseDB.delete("document_chunks", "document_id", document_id)
-            SupabaseDB.delete("document_embeddings", "document_id", document_id)
-            SupabaseDB.delete("document_extractions", "document_id", document_id)
-            SupabaseDB.delete("documents_metadata", "document_id", document_id)
-            SupabaseDB.delete("processing_jobs", "document_id", document_id)
-            SupabaseDB.delete("agent_runs", "document_id", document_id)
-            SupabaseDB.delete("validation_results", "source_document_id", document_id)
-            SupabaseDB.delete("workflow_instances", "document_id", document_id)
-        except Exception:
-            pass
+        SupabaseDB.delete_document_cascade(document_id)
         try:
             from .pinecone_service import pinecone_service
             pinecone_service.delete_by_document(document_id, namespace=organization_id)

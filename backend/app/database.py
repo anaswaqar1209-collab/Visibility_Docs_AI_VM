@@ -221,6 +221,27 @@ class SupabaseDB:
         _local_delete(table, id_column, id_value)
 
     @staticmethod
+    def delete_document_cascade(document_id: str):
+        try:
+            client = _get_supabase()
+            if _use_supabase and client:
+                client.rpc("delete_document_cascade", {"p_document_id": document_id}).execute()
+        except Exception:
+            pass
+        conn = _get_local_db()
+        conn.execute("BEGIN")
+        try:
+            for tbl in ("document_chunks", "document_embeddings", "document_extractions",
+                        "documents_metadata", "processing_jobs", "agent_runs",
+                        "workflow_instances"):
+                conn.execute(f"DELETE FROM {tbl} WHERE document_id=?", (document_id,))
+            conn.execute("DELETE FROM validation_results WHERE source_document_id=?", (document_id,))
+            conn.execute("DELETE FROM documents WHERE id=?", (document_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
+    @staticmethod
     def select(table: str, columns: str = "*", filters: dict = None, like: dict = None, limit: int = None, offset: int = None):
         try:
             client = _get_supabase()

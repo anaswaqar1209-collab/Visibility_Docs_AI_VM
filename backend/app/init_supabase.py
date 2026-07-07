@@ -189,6 +189,23 @@ BEGIN
     LIMIT match_count;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION delete_document_cascade(p_document_id TEXT)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    DELETE FROM document_chunks WHERE document_id = p_document_id;
+    DELETE FROM document_embeddings WHERE document_id = p_document_id;
+    DELETE FROM document_extractions WHERE document_id = p_document_id;
+    DELETE FROM documents_metadata WHERE document_id = p_document_id;
+    DELETE FROM processing_jobs WHERE document_id = p_document_id;
+    DELETE FROM agent_runs WHERE document_id = p_document_id;
+    DELETE FROM validation_results WHERE source_document_id = p_document_id;
+    DELETE FROM workflow_instances WHERE document_id = p_document_id;
+    DELETE FROM documents WHERE id = p_document_id;
+END;
+$$;
 """
 
 
