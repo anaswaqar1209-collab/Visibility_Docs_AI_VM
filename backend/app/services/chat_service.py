@@ -36,9 +36,9 @@ class ChatService:
         sid, resolved_ids, is_first = self._get_or_create_session(session_id, organization_id, document_ids)
 
         if resolved_ids:
-            search_results = rag_service.hybrid_search(question, organization_id, document_ids=resolved_ids, limit=5)
+            search_results = rag_service.hybrid_search(question, organization_id, document_ids=resolved_ids, limit=15)
         else:
-            search_results = rag_service.hybrid_search(question, organization_id, limit=5)
+            search_results = rag_service.hybrid_search(question, organization_id, limit=15)
 
         if not search_results:
             if is_first:

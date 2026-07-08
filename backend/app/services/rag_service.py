@@ -420,7 +420,7 @@ class RAGService:
             if document_ids:
                 filter_dict["document_id"] = {"$in": document_ids}
             print(f"[SEARCH] Querying Pinecone (ns='{organization_id}')...")
-            pinecone_results = pinecone_service.query(query_embedding, top_k=limit + 5, filter=filter_dict if len(filter_dict) > 1 else None, namespace=organization_id)
+            pinecone_results = pinecone_service.query(query_embedding, top_k=limit + 10, filter=filter_dict if len(filter_dict) > 1 else None, namespace=organization_id)
             if pinecone_results:
                 print(f"[SEARCH] Pinecone returned {len(pinecone_results)} results")
                 doc_ids = list(set(r["metadata"].get("document_id", "") for r in pinecone_results))
@@ -440,7 +440,7 @@ class RAGService:
                         "document_id": did,
                         "document_title": title,
                         "document_type": dtype or meta.get("_document_type"),
-                        "chunk_text": meta.get("chunk_text", "")[:1500],
+                        "chunk_text": meta.get("chunk_text", "")[:3000],
                         "page_number": meta.get("page_number"),
                         "score": r.get("score", 0),
                         "metadata": meta,
@@ -471,7 +471,7 @@ class RAGService:
                         "document_id": did,
                         "document_title": title,
                         "document_type": dtype,
-                        "chunk_text": item.get("content", "")[:1500],
+                        "chunk_text": item.get("content", "")[:3000],
                         "page_number": item.get("page_id"),
                         "score": 0.9,
                         "metadata": item.get("metadata"),
@@ -510,9 +510,9 @@ class RAGService:
                             "document_id": did,
                             "document_title": title,
                             "document_type": dtype,
-                            "chunk_text": item.get("content", "")[:1500],
-                            "page_number": item.get("page_id"),
-                            "score": 0.7,
+                        "chunk_text": item.get("content", "")[:3000],
+                        "page_number": item.get("page_id"),
+                        "score": 0.7,
                             "metadata": item.get("metadata"),
                         })
             except Exception:
