@@ -25,6 +25,7 @@ PHASE3_AGENT_PROMPT_MAP = {
     "hr_agent": os.path.join("phase3", "hr_agent.md"),
     "legal_agent": os.path.join("phase3", "legal_agent.md"),
     "compliance_agent": os.path.join("phase3", "compliance_agent.md"),
+    "other_agent": os.path.join("phase3", "other.md"),
 }
 
 DOCUMENT_TO_PHASE3_AGENT = {
@@ -40,7 +41,7 @@ DOCUMENT_TO_PHASE3_AGENT = {
     "maintenance_report": "compliance_agent",
     "sop": "compliance_agent",
     "engineering_drawing": "compliance_agent",
-    "other": "compliance_agent",
+    "other": "other_agent",
 }
 
 VALID_PHASE3_AGENTS = set(PHASE3_AGENT_PROMPT_MAP.keys())
@@ -155,7 +156,7 @@ class ClassificationAgent:
 
             if agent_type not in VALID_PHASE3_AGENTS:
                 old_agent = agent_type
-                agent_type = DOCUMENT_TO_PHASE3_AGENT.get(doc_type, "compliance_agent")
+                agent_type = DOCUMENT_TO_PHASE3_AGENT.get(doc_type, "other_agent")
                 print(f"[CLASSIFY] Invalid agent '{old_agent}' from LLM, mapped to '{agent_type}' for type '{doc_type}'")
 
             result_data = {
@@ -180,7 +181,7 @@ class CategoryExtractionAgent:
     def extract(self, text: str, document_type: str, agent_type: str = "") -> dict:
         from .groq_service import groq_service
 
-        agent = agent_type or DOCUMENT_TO_PHASE3_AGENT.get(document_type, "compliance_agent")
+        agent = agent_type or DOCUMENT_TO_PHASE3_AGENT.get(document_type, "other_agent")
         print(f"[EXTRACT] Agent: {agent} | DocType: {document_type} | Text: {len(text)} chars")
         prompt_template = _load_phase3_prompt(f"{agent}.md")
         if not prompt_template:

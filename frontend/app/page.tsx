@@ -110,6 +110,9 @@ export default function Home() {
 /* ════════════════════════════════════════
    DOCUMENTS
    ════════════════════════════════════════ */
+function loadSeen(): Set<string> { try { const r = localStorage.getItem("sc"); return new Set(r ? JSON.parse(r) : []); } catch { return new Set(); } }
+function saveSeen(id: string) { try { const r = localStorage.getItem("sc"); const a: string[] = r ? JSON.parse(r) : []; if (!a.includes(id)) { a.push(id); localStorage.setItem("sc", JSON.stringify(a)); } } catch {} }
+
 function AllDocumentsPage({ showToast }: any) {
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -117,7 +120,7 @@ function AllDocumentsPage({ showToast }: any) {
   const [search, setSearch] = useState("");
   const [classifyQueue, setClassifyQueue] = useState<any[]>([]);
   const classifyQueueRef = useRef<any[]>([]);
-  const seenClassified = useRef<Set<string>>(new Set());
+  const seen = useRef<Set<string>>(loadSeen());
   const prevDocsRef = useRef<any[]>([]);
 
   useEffect(() => { load(); const i = setInterval(load, 5000); return () => clearInterval(i); }, []);
@@ -130,20 +133,32 @@ function AllDocumentsPage({ showToast }: any) {
 
       const prev = prevDocsRef.current;
       const added: any[] = [];
-      for (const nd of newDocs) {
-        if ((nd.status === "classified" || nd.status === "processed" || nd.status === "embedded") &&
-            !seenClassified.current.has(nd.id) && nd.document_type && nd.document_type !== "other") {
-          const old = prev.find((p: any) => p.id === nd.id);
-          const prevStatus = old?.status || "";
-          if (prevStatus !== nd.status && prevStatus !== "") {
-            seenClassified.current.add(nd.id);
+      if (prev.length > 0) {
+        for (const nd of newDocs) {
+          if ((nd.status === "classified" || nd.status === "processed" || nd.status === "embedded") &&
+              !seen.current.has(nd.id) && nd.document_type) {
+            const old = prev.find((p: any) => p.id === nd.id);
+            const prevStatus = old?.status || "";
+            if (prevStatus !== nd.status && prevStatus !== "") {
+              seen.current.add(nd.id); saveSeen(nd.id);
+              added.push(nd);
+            }
+          }
+        }
+      } else {
+        for (const nd of newDocs) {
+          if ((nd.status === "classified" || nd.status === "processed" || nd.status === "embedded") &&
+              !seen.current.has(nd.id) && nd.document_type) {
+            seen.current.add(nd.id); saveSeen(nd.id);
             added.push(nd);
           }
         }
       }
       if (added.length > 0) {
-        classifyQueueRef.current = [...classifyQueueRef.current, ...added];
-        setClassifyQueue([...classifyQueueRef.current]);
+        setTimeout(() => {
+          classifyQueueRef.current = [...classifyQueueRef.current, ...added];
+          setClassifyQueue([...classifyQueueRef.current]);
+        }, 800);
       }
 
       prevDocsRef.current = newDocs;
@@ -249,7 +264,7 @@ function AllDocumentsPage({ showToast }: any) {
 /* ─────── Classification Popup ─────── */
 function ClassifyPopup({ doc, queueLen = 1, onConfirm, onDismiss }: any) {
   const [type, setType] = useState(doc.document_type || "");
-  const types = ["finance_agent", "procurement_agent", "hr_agent", "legal_agent", "compliance_agent"];
+  const types = ["finance_agent", "procurement_agent", "hr_agent", "legal_agent", "compliance_agent", "other_agent"];
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm fade-in" onClick={onDismiss}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 mx-4 border border-slate-200 slide-up" onClick={e => e.stopPropagation()}>
@@ -309,6 +324,7 @@ function UploadBox({ onUpload }: any) {
   const [uploading, setUploading] = useState(false);
   const [drag, setDrag] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
+  const pendingIds = useRef<Set<string>>(new Set());
 
   const addFiles = (list: FileList) => {
     setFiles(prev => [...prev, ...Array.from(list)].slice(0, 5));
@@ -317,17 +333,40 @@ function UploadBox({ onUpload }: any) {
   const upload = async () => {
     if (!files.length) return;
     setUploading(true);
+    const ids: string[] = [];
     for (let i = 0; i < files.length; i++) {
       const fd = new FormData();
       fd.append("file", files[i]);
       fd.append("organization_id", ORG);
       try {
-        await fetch(`${API}/api/v1/documents/upload`, { method: "POST", body: fd });
+        const r = await fetch(`${API}/api/v1/documents/upload`, { method: "POST", body: fd });
+        const data = await r.json();
+        if (data?.id) ids.push(data.id);
       } catch { }
     }
-    setFiles([]);
-    setUploading(false);
+    ids.forEach(id => pendingIds.current.add(id));
     onUpload?.();
+
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(`${API}/api/v1/documents?q=&limit=200&organization_id=${ORG}`);
+        const d = await r.json();
+        const allDocs: any[] = d?.documents || d || [];
+        const done: string[] = [];
+        for (const id of Array.from(pendingIds.current)) {
+          const doc = allDocs.find((x: any) => x.id === id);
+          if (doc && (doc.status === "embedded" || doc.status === "processed" || doc.status === "classified" || doc.status === "failed" || doc.status === "error")) {
+            done.push(id);
+          }
+        }
+        done.forEach(id => pendingIds.current.delete(id));
+        if (pendingIds.current.size === 0) {
+          clearInterval(poll);
+          setUploading(false);
+          setFiles([]);
+        }
+      } catch { }
+    }, 3000);
   };
 
   return (
@@ -361,15 +400,15 @@ function UploadBox({ onUpload }: any) {
               <span className="truncate text-slate-700 font-medium">{f.name}</span>
               <span className="text-slate-400 shrink-0 ml-2">{(f.size / 1024 / 1024).toFixed(1)}MB</span>
               {uploading && (
-                <div className="absolute inset-0 bg-white/70 flex items-center justify-center rounded-lg">
-                  <span className="loading loading-spinner loading-sm text-indigo-500" />
+                <div className="absolute inset-0 bg-white/80 flex items-center justify-center rounded-lg">
+                  <div className="spinner-sm" />
                 </div>
               )}
             </div>
           ))}
           <button onClick={upload} disabled={uploading}
             className="btn btn-primary btn-sm w-full bg-gradient-to-r from-indigo-500 to-purple-500 text-white border-0 shadow-lg shadow-indigo-500/20 hover:shadow-xl hover:shadow-indigo-500/30 transition-all">
-            {uploading ? <><span className="loading loading-spinner loading-xs" /> Uploading...</> : `Upload ${files.length} file${files.length > 1 ? "s" : ""}`}
+            {uploading ? <><div className="spinner-sm inline-block mr-1.5" /> Uploading...</> : `Upload ${files.length} file${files.length > 1 ? "s" : ""}`}
           </button>
         </div>
       )}
