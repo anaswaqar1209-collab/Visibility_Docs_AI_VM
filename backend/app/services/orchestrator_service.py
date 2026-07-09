@@ -3,10 +3,11 @@ import logging
 from datetime import datetime
 from ..database import SupabaseDB
 from .ocr_service import ocr_service
-from .agent_orchestrator import classification_agent, category_agents
+from .agent_orchestrator import classification_agent, category_agents, DOCUMENT_TO_PHASE3_AGENT
 from .classification_service import classification_service
 from .rag_service import rag_service
 from .preprocessing_service import preprocessing_service
+from .orchestration_logger import (OrchestrationLogger, get_logger, reset_logger, C)
 
 logger = logging.getLogger("visibility-docs")
 
@@ -90,9 +91,9 @@ class OrchestratorService:
         raise FileNotFoundError(f"File not found: {fp}")
 
     def classify_only(self, document_id: str, organization_id: str) -> dict:
-        print(f"\n{'#'*70}")
-        print(f"# [CLASSIFY-ONLY] Starting for document: {document_id}")
-        print(f"{'#'*70}")
+        log = reset_logger(document_id, doc_id=document_id)
+        log.start("Classifying only (no extraction)")
+        log.set_total_steps(3)
         try:
             doc_result = SupabaseDB.select("documents", filters={"id": document_id, "organization_id": organization_id})
             doc_data = getattr(doc_result, "data", [])
@@ -100,14 +101,15 @@ class OrchestratorService:
                 raise ValueError("Document not found")
             doc = doc_data[0] if isinstance(doc_data, list) else doc_data
             file_path = self._resolve_file(doc)
-            print(f"[CLASSIFY-ONLY] File path: {file_path}")
+
+            log.step("FILE RESOLUTION")
+            log.info(f"Path: {file_path}")
+            log.ok("File resolved")
 
             # Try direct text extraction first (fast path for PDFs)
             direct_text = self._extract_direct_text(file_path, max_pages=2)
-            print(f"[CLASSIFY-ONLY] Direct text extracted: {len(direct_text)} chars")
             if direct_text.strip():
                 self.update_stage(document_id, organization_id, "ocr_processing", 20, "running")
-                # Still run OCR for full text, but classify immediately
                 import threading
                 ocr_result = {}
                 ocr_exc = [None]
@@ -117,53 +119,74 @@ class OrchestratorService:
                     except Exception as e:
                         ocr_exc[0] = e
                 ocr_thread = threading.Thread(target=_do_ocr)
-                print(f"[CLASSIFY-ONLY] Starting background OCR while classifying...")
                 ocr_thread.start()
 
-                self.update_stage(document_id, organization_id, "classifying", 50, "running")
+                log.step("CLASSIFICATION")
+                log.agent_call("classification_agent", "classification_agent.md", "Groq API")
                 t0 = time.time()
                 classification = classification_agent.classify(direct_text, doc.get("title", ""))
                 class_duration = int((time.time() - t0) * 1000)
-                print(f"[CLASSIFY-ONLY] Classification result: type={classification['document_type']}, agent={classification.get('agent_type','')}, conf={classification['confidence']:.2f}, time={class_duration}ms")
+                log.result("Type", classification["document_type"], C.GREEN)
+                log.result("Agent", classification.get("agent_type", ""), C.MAGENTA)
+                log.result("Confidence", f"{classification['confidence']:.2f}")
+                log.result("Duration", f"{class_duration}ms", C.DIM)
 
                 ocr_thread.join(timeout=300)
                 raw_text = ocr_result.get("text", "") or direct_text
                 page_count = ocr_result.get("page_count", 0)
-                print(f"[CLASSIFY-ONLY] OCR completed: {len(raw_text)} chars, {page_count} pages")
+
+                log.step("OCR PROCESSING")
+                log.agent_call("ocr_service", "", "PaddleOCR")
+                log.ok(f"Extracted {len(raw_text)} chars, {page_count} pages")
             else:
-                print(f"[CLASSIFY-ONLY] No direct text, running full OCR...")
+                log.step("OCR PROCESSING")
+                log.agent_call("ocr_service", "", "PaddleOCR")
                 self.update_stage(document_id, organization_id, "ocr_processing", 20, "running")
                 ocr_result = ocr_service.process_document(file_path)
                 raw_text = ocr_result.get("text", "")
                 page_count = ocr_result.get("page_count", 0)
-                print(f"[CLASSIFY-ONLY] OCR completed: {len(raw_text)} chars, {page_count} pages")
+                log.ok(f"Extracted {len(raw_text)} chars, {page_count} pages")
 
+                log.step("CLASSIFICATION")
+                log.agent_call("classification_agent", "classification_agent.md", "Groq API")
                 self.update_stage(document_id, organization_id, "classifying", 50, "running")
                 t0 = time.time()
                 classification = classification_agent.classify(raw_text, doc.get("title", ""))
                 class_duration = int((time.time() - t0) * 1000)
-                print(f"[CLASSIFY-ONLY] Classification result: type={classification['document_type']}, agent={classification.get('agent_type','')}, conf={classification['confidence']:.2f}, time={class_duration}ms")
+                log.result("Type", classification["document_type"], C.GREEN)
+                log.result("Agent", classification.get("agent_type", ""), C.MAGENTA)
+                log.result("Confidence", f"{classification['confidence']:.2f}")
+                log.result("Duration", f"{class_duration}ms", C.DIM)
 
             doc_type = classification["document_type"]
-            if classification.get("confidence", 0) < 0.6:
+            agent_type = classification.get("agent_type", "") or DOCUMENT_TO_PHASE3_AGENT.get(doc_type, "other_agent")
+            if classification.get("confidence", 0) < 0.3:
                 doc_type = "other"
-                print(f"[CLASSIFY-ONLY] Low confidence ({classification['confidence']:.2f}), falling back to 'other'")
+                agent_type = "other_agent"
+                log.warn(f"Low confidence ({classification['confidence']:.2f}), falling back to 'other'")
 
-            SupabaseDB.update("documents", {"document_type": doc_type, "language": classification.get("language", "en"), "status": "classified"}, "id", document_id)
+            SupabaseDB.update("documents", {
+                "document_type": doc_type,
+                "phase3_agent": agent_type,
+                "language": classification.get("language", "en"),
+                "status": "classified",
+            }, "id", document_id)
             self.update_stage(document_id, organization_id, "classified", 60, "completed")
-            print(f"[CLASSIFY-ONLY] Done -> document_type={doc_type}, agent={classification.get('agent_type','')}")
 
+            log.divider()
+            log.end("classified")
             return {
                 "document_id": document_id,
                 "document_type": doc_type,
-                "agent_type": classification.get("agent_type", ""),
+                "agent_type": agent_type,
                 "confidence": classification.get("confidence", 0),
                 "reasoning": classification.get("reasoning", ""),
                 "language": classification.get("language", "en"),
                 "page_count": page_count,
             }
         except Exception as e:
-            print(f"[CLASSIFY-ONLY] FAILED: {e}")
+            log.fail(str(e))
+            log.end("failed")
             logger.error(f"Classify-only failed for {document_id}: {e}")
             SupabaseDB.update("documents", {"status": "failed", "error_message": str(e)}, "id", document_id)
             self.update_stage(document_id, organization_id, stage="ocr_processing", status="failed", error=str(e))
@@ -184,9 +207,6 @@ class OrchestratorService:
             return ""
 
     def run_pipeline(self, document_id: str, organization_id: str) -> dict:
-        print(f"\n{'='*70}")
-        print(f"[PIPELINE] Starting pipeline for document: {document_id} | org: {organization_id}")
-        print(f"{'='*70}")
         status = "failed"
         classification = {"document_type": "other", "confidence": 0.0, "reasoning": ""}
         extraction = {"extracted_data": {}, "confidence": 0.0}
@@ -194,17 +214,23 @@ class OrchestratorService:
 
         try:
             job = self.get_or_create_job(document_id, organization_id)
-            print(f"[PIPELINE] Stage: {job.get('stage', 'queued')} | Status: {job.get('status', 'queued')}")
             doc_result = SupabaseDB.select("documents", filters={"id": document_id, "organization_id": organization_id})
             doc_data = getattr(doc_result, "data", [])
             if not doc_data or len(doc_data) == 0:
                 raise ValueError("Document not found")
             doc = doc_data[0] if isinstance(doc_data, list) else doc_data
             file_path = self._resolve_file(doc)
-            print(f"[PIPELINE] File: {file_path}")
 
-            # Stage 1 & 2: OCR + Classification in parallel
-            print(f"[PIPELINE] Stage 1/2: OCR + Classification (parallel)")
+            log = reset_logger(doc.get("title", document_id), doc_id=document_id)
+            log.start()
+            log.set_total_steps(7)
+
+            # ── Step 1: File Resolution ──
+            log.step("FILE RESOLUTION")
+            log.info(f"Path: {file_path}")
+            log.ok("File resolved")
+
+            # ── Step 2: OCR + Step 3: Classification (parallel) ──
             self.update_stage(document_id, organization_id, "ocr_processing", 20, "running")
 
             import threading
@@ -213,101 +239,134 @@ class OrchestratorService:
 
             def _do_ocr():
                 try:
-                    print(f"[PIPELINE] OCR thread started for: {file_path}")
                     ocr_result.update(ocr_service.process_document(file_path))
-                    print(f"[PIPELINE] OCR thread completed")
                 except Exception as e:
                     ocr_exc[0] = e
-                    print(f"[PIPELINE] OCR thread FAILED: {e}")
 
             ocr_thread = threading.Thread(target=_do_ocr)
             ocr_thread.start()
 
-            # Try direct text from first 2 pages for fast classification while OCR runs
+            # Try direct text for fast classification while OCR runs
             direct_text = self._extract_direct_text(file_path, max_pages=2)
-            print(f"[PIPELINE] Direct text (first 2 pages): {len(direct_text)} chars")
             if direct_text.strip():
+                log.step("CLASSIFICATION")
+                log.agent_call("classification_agent", "classification_agent.md", "Groq API (llama-8b)")
+                log.info(f"Classifying from direct text while OCR runs in background...")
                 self.update_stage(document_id, organization_id, "classifying", 50, "running")
                 t0 = time.time()
-                print(f"[PIPELINE] Classifying from direct text (while OCR runs in background)...")
                 classification = classification_agent.classify(direct_text, doc.get("title", ""))
                 class_duration = int((time.time() - t0) * 1000)
-                print(f"[PIPELINE] Classification (from direct text): type={classification['document_type']}, agent={classification.get('agent_type','')}, conf={classification['confidence']:.2f}, time={class_duration}ms")
+                log.result("Type", classification["document_type"], C.GREEN)
+                log.result("Agent", classification.get("agent_type", ""), C.MAGENTA)
+                log.result("Confidence", f"{classification['confidence']:.2f}")
+                log.result("Reasoning", classification.get("reasoning", "")[:80], C.DIM)
+                log.result("Duration", f"{class_duration}ms", C.DIM)
                 self.log_agent_run(organization_id, document_id, "classification_agent",
                                    f"text_len={len(direct_text)}", f"type={classification['document_type']}, conf={classification['confidence']}",
                                    classification.get("confidence", 0), class_duration)
 
-            # Wait for OCR to finish
-            print(f"[PIPELINE] Waiting for OCR to complete...")
+            # Wait for OCR
             ocr_thread.join(timeout=300)
             if ocr_exc[0]:
                 raise ocr_exc[0]
 
             raw_text = ocr_result.get("text", "")
             page_count = ocr_result.get("page_count", 0)
-            print(f"[PIPELINE] OCR complete: {len(raw_text)} chars, {page_count} pages, source: {ocr_result.get('source', 'ocr')}")
+
+            log.step("OCR PROCESSING")
+            log.agent_call("ocr_service", "", "PaddleOCR")
+            log.ok(f"Extracted {len(raw_text)} chars, {page_count} pages")
+            log.result("Source", ocr_result.get("source", "ocr"), C.DIM)
 
             SupabaseDB.update("documents", {"raw_text": raw_text, "page_count": page_count, "status": "ocr_done"}, "id", document_id)
             self.update_stage(document_id, organization_id, "ocr_done", 40)
 
-            # If no direct text was available (scanned PDF / image), classify with OCR text now
+            # Classify from OCR text if direct text wasn't available
             if not direct_text.strip():
+                log.step("CLASSIFICATION")
+                log.agent_call("classification_agent", "classification_agent.md", "Groq API (llama-8b)")
+                log.info("No direct text — classifying from OCR output")
                 self.update_stage(document_id, organization_id, "classifying", 50, "running")
                 t0 = time.time()
-                print(f"[PIPELINE] No direct text - classifying from OCR text...")
                 classification = classification_agent.classify(raw_text, doc.get("title", ""))
                 class_duration = int((time.time() - t0) * 1000)
-                print(f"[PIPELINE] Classification (from OCR text): type={classification['document_type']}, agent={classification.get('agent_type','')}, conf={classification['confidence']:.2f}, time={class_duration}ms")
+                log.result("Type", classification["document_type"], C.GREEN)
+                log.result("Agent", classification.get("agent_type", ""), C.MAGENTA)
+                log.result("Confidence", f"{classification['confidence']:.2f}")
+                log.result("Reasoning", classification.get("reasoning", "")[:80], C.DIM)
+                log.result("Duration", f"{class_duration}ms", C.DIM)
                 self.log_agent_run(organization_id, document_id, "classification_agent",
                                    f"text_len={len(raw_text)}", f"type={classification['document_type']}, conf={classification['confidence']}",
                                    classification.get("confidence", 0), class_duration)
 
             doc_type = classification["document_type"]
-            if classification.get("confidence", 0) < 0.6:
+            agent_type = classification.get("agent_type", "") or DOCUMENT_TO_PHASE3_AGENT.get(doc_type, "other_agent")
+            if classification.get("confidence", 0) < 0.3:
                 doc_type = "other"
-                print(f"[PIPELINE] Low confidence ({classification['confidence']:.2f}), falling back to 'other'")
+                agent_type = "other_agent"
+                log.warn(f"Low confidence ({classification['confidence']:.2f}) — falling back to 'other'")
 
-            SupabaseDB.update("documents", {"document_type": doc_type, "language": classification.get("language", "en"), "status": "classified"}, "id", document_id)
+            SupabaseDB.update("documents", {
+                "document_type": doc_type,
+                "phase3_agent": agent_type,
+                "language": classification.get("language", "en"),
+                "status": "classified",
+            }, "id", document_id)
             self.update_stage(document_id, organization_id, "classified", 60)
-            print(f"[PIPELINE] Stage 2 done: classified as '{doc_type}'")
 
-            # Stage 3 & 4: Extraction + Embedding in parallel
-            self.update_stage(document_id, organization_id, "extracting", 70, "running")
-            print(f"[PIPELINE] Stage 3/4: Extraction + Embedding (parallel)")
+            log.result("Route → Phase 3 Agent", agent_type, C.MAGENTA)
 
-            # Extract tables and prepend to raw_text for extraction
+            # ── Step 4: Table Extraction ──
+            log.step("TABLE EXTRACTION")
+            log.agent_call("table_service", "", "Camelot / pdfplumber")
             try:
                 from .table_service import extract_tables, tables_to_text
                 detected_tables = extract_tables(file_path)
                 if detected_tables:
                     table_text = tables_to_text(detected_tables)
                     raw_text = table_text + "\n\n" + raw_text
-                    print(f"[PIPELINE] Prepended {len(detected_tables)} tables ({len(table_text)} chars) to raw_text")
+                    log.ok(f"Found {len(detected_tables)} tables ({len(table_text)} chars) prepended to text")
+                else:
+                    log.ok("No tables detected")
             except Exception as e:
-                print(f"[PIPELINE] Table extraction skipped: {e}")
+                log.info(f"Table extraction skipped: {e}")
+
+            # ── Stage 5 & 6: Entity Extraction + Embedding (parallel) ──
+            self.update_stage(document_id, organization_id, "extracting", 70, "running")
 
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                print(f"[PIPELINE] Submitting extraction (agent: {classification.get('agent_type','')}) + embedding in parallel...")
-                ext_future = pool.submit(category_agents.extract, raw_text, doc_type, classification.get("agent_type", ""))
+                effective_agent = agent_type
+
+                log.step("ENTITY EXTRACTION")
+                log.agent_call(effective_agent, f"phase3/{effective_agent}.md", "Groq API (llama-70b)")
+                log.info("Running in parallel with embedding...")
+
+                ext_future = pool.submit(category_agents.extract, raw_text, doc_type, effective_agent)
                 emb_future = pool.submit(rag_service.index_document, document_id, organization_id, raw_text, file_path)
 
                 t0 = time.time()
                 extraction = ext_future.result()
                 ext_duration = int((time.time() - t0) * 1000)
-                print(f"[PIPELINE] Extraction complete: fields={list(extraction.get('extracted_data', {}).keys())[:5]}, conf={extraction.get('confidence', 0):.2f}, time={ext_duration}ms")
-                self.log_agent_run(organization_id, document_id, f"{doc_type}_agent",
-                                   f"type={doc_type}, text_len={len(raw_text)}",
-                                   f"fields={list(extraction.get('extracted_data', {}).keys())[:10]}",
-                                   extraction.get("confidence", 0), ext_duration)
+                fields = list(extraction.get("extracted_data", {}).keys())
+                log.ok(f"Extracted {len(fields)} fields: {', '.join(fields[:8])}")
+                log.result("Confidence", f"{extraction.get('confidence', 0):.2f}", C.GREEN)
+                log.result("Duration", f"{ext_duration}ms", C.DIM)
 
+                log.step("EMBEDDING & VECTOR INDEXING")
+                log.agent_call("rag_service", "", "all-MiniLM-L6-v2 → Pinecone + Supabase")
                 try:
                     emb_future.result()
-                    print(f"[PIPELINE] Embedding complete")
+                    log.ok("Document indexed to vector store")
                 except Exception as e:
-                    logger.warning(f"Embedding failed in parallel: {e}")
-                    print(f"[PIPELINE] Embedding FAILED: {e}")
+                    log.warn(f"Embedding failed: {e}")
 
+                self.log_agent_run(organization_id, document_id, f"{doc_type}_agent",
+                                   f"type={doc_type}, text_len={len(raw_text)}",
+                                   f"fields={fields[:10]}",
+                                   extraction.get("confidence", 0), ext_duration)
+
+            # ── Save extraction results ──
             SupabaseDB.insert("documents_metadata", {
                 "organization_id": organization_id,
                 "document_id": document_id,
@@ -325,20 +384,19 @@ class OrchestratorService:
                 "confidence": extraction.get("confidence", 0),
             })
             self.update_stage(document_id, organization_id, "extracted", 80)
-            print(f"[PIPELINE] Extraction data saved to DB")
-
             self.update_stage(document_id, organization_id, "embedded", 95)
 
-            # Mark complete
+            # ── Mark complete ──
             SupabaseDB.update("documents", {"status": "processed"}, "id", document_id)
             self.update_stage(document_id, organization_id, "completed", 100, "completed")
             status = "processed"
-            print(f"[PIPELINE] {'='*50}")
-            print(f"[PIPELINE] COMPLETED: {document_id} -> {status}")
-            print(f"[PIPELINE] {'='*50}")
+
+            log.end(status)
 
         except Exception as e:
-            print(f"[PIPELINE] FAILED: {e}")
+            log = get_logger()
+            log.fail(str(e))
+            log.end("failed")
             import traceback as tb
             tb.print_exc()
             logger.error(f"Pipeline failed for {document_id}: {e}")

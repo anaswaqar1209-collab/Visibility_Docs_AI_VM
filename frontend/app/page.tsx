@@ -37,6 +37,7 @@ function typeColor(t: string) {
   const m: Record<string, string> = {
     invoice: "badge-secondary", contract: "badge-primary",
     report: "badge-accent", resume: "badge-info",
+    cv: "badge-info", transcript: "badge-accent",
     other: "badge-ghost",
   };
   return m[t] || "badge-ghost";
@@ -199,18 +200,18 @@ function AllDocumentsPage({ showToast, orgId, token }: any) {
     setClassifyQueue([...classifyQueueRef.current]);
   };
 
-  const handleTypeChange = async (docId: string, newType: string) => {
+  const handleTypeChange = async (docId: string, docType: string, phase3Agent: string) => {
     try {
       await authFetch(token, `${API}/api/v1/documents/${docId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ document_type: newType, organization_id: orgId }),
+        body: JSON.stringify({ document_type: docType, phase3_agent: phase3Agent, organization_id: orgId }),
       });
-      setDocs(prev => prev.map(d => d.id === docId ? { ...d, document_type: newType } : d));
+      setDocs(prev => prev.map(d => d.id === docId ? { ...d, document_type: docType, phase3_agent: phase3Agent } : d));
       nextInQueue();
-      showToast(`Document type updated to "${newType}" ✅`);
+      showToast(`Agent set to "${phase3Agent.replace(/_/g, " ")}" ✅`);
     } catch {
-      showToast("Failed to update document type");
+      showToast("Failed to update document settings");
     }
   };
 
@@ -289,9 +290,41 @@ function AllDocumentsPage({ showToast, orgId, token }: any) {
   );
 }
 
+/* ─────── doc type → agent mapping ─────── */
+const DOC_TYPE_TO_AGENT: Record<string, string> = {
+  invoice: "finance_agent",
+  financial_statement: "finance_agent",
+  purchase_order: "procurement_agent",
+  quotation: "procurement_agent",
+  hr_document: "hr_agent",
+  resume: "hr_agent",
+  transcript: "hr_agent",
+  contract: "legal_agent",
+  sop: "compliance_agent",
+  audit_report: "compliance_agent",
+  quality_report: "compliance_agent",
+  certificate: "compliance_agent",
+  maintenance_report: "compliance_agent",
+  engineering_drawing: "compliance_agent",
+  other: "other_agent",
+};
+
+function agentLabel(a: string) {
+  const m: Record<string, string> = {
+    finance_agent: "💰 Finance Agent",
+    procurement_agent: "📦 Procurement Agent",
+    hr_agent: "👨‍💼 HR Agent",
+    legal_agent: "⚖️ Legal Agent",
+    compliance_agent: "✅ Compliance Agent",
+    other_agent: "❓ Other Agent",
+  };
+  return m[a] || a;
+}
+
 /* ─────── Classification Popup ─────── */
 function ClassifyPopup({ doc, queueLen = 1, onConfirm, onDismiss }: any) {
-  const [type, setType] = useState(doc.document_type || "");
+  const defaultAgent = DOC_TYPE_TO_AGENT[doc.document_type] || "other_agent";
+  const [agent, setAgent] = useState(defaultAgent);
   const types = ["finance_agent", "procurement_agent", "hr_agent", "legal_agent", "compliance_agent", "other_agent"];
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm fade-in" onClick={onDismiss}>
@@ -315,15 +348,16 @@ function ClassifyPopup({ doc, queueLen = 1, onConfirm, onDismiss }: any) {
 
         <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-4 mb-4 border border-indigo-100">
           <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-1">Detected Type</p>
-          <p className="text-lg font-bold text-slate-800">{doc.document_type}</p>
+          <p className="text-lg font-bold text-slate-800">{doc.document_type || "unknown"}</p>
+          <p className="text-xs text-slate-500 mt-1">Agent: {agentLabel(defaultAgent)}</p>
         </div>
 
         <div className="mb-4">
-          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">Change Type</label>
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">Change Extraction Agent</label>
           <div className="relative">
-            <select value={type} onChange={e => setType(e.target.value)}
+            <select value={agent} onChange={e => setAgent(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm appearance-none cursor-pointer outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all">
-              {types.map(t => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
+              {types.map(t => <option key={t} value={t}>{agentLabel(t)}</option>)}
             </select>
             <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -336,7 +370,7 @@ function ClassifyPopup({ doc, queueLen = 1, onConfirm, onDismiss }: any) {
             className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-all">
             Dismiss
           </button>
-          <button onClick={() => onConfirm(doc.id, type)}
+          <button onClick={() => onConfirm(doc.id, doc.document_type, agent)}
             className="flex-1 px-4 py-2.5 rounded-xl bg-indigo-600 text-sm font-semibold text-white hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200">
             Save
           </button>

@@ -18,7 +18,6 @@ from fastapi.exceptions import RequestValidationError
 from .routers import documents, search, chat, auth
 from .auth_deps import get_current_user, get_optional_user
 from fastapi import Depends
-from .utils.file_utils import ensure_dirs
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -28,7 +27,6 @@ logger = logging.getLogger("visibility-docs")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        ensure_dirs()
         if settings.DATABASE_URL:
             from .init_supabase import init_supabase_schema
             init_supabase_schema(settings.DATABASE_URL)

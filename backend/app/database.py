@@ -45,6 +45,7 @@ def _init_local_db(conn):
             organization_id TEXT NOT NULL,
             title TEXT NOT NULL,
             document_type TEXT,
+            phase3_agent TEXT,
             status TEXT DEFAULT 'uploaded',
             original_file_url TEXT,
             file_hash TEXT,
@@ -212,6 +213,10 @@ def _init_local_db(conn):
         pass
     try:
         conn.execute("ALTER TABLE document_chunks ADD COLUMN chunk_text TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE documents ADD COLUMN phase3_agent TEXT")
     except Exception:
         pass
 

@@ -17,6 +17,8 @@ class DocumentType(str, Enum):
     FINANCIAL_STATEMENT = "financial_statement"
     ENGINEERING_DRAWING = "engineering_drawing"
     SOP = "sop"
+    RESUME = "resume"
+    TRANSCRIPT = "transcript"
     OTHER = "other"
 
 

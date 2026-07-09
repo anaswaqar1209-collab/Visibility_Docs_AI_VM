@@ -15,11 +15,11 @@ CREATE TABLE IF NOT EXISTS documents (
     organization_id TEXT NOT NULL,
     title TEXT NOT NULL,
     document_type TEXT,
+    phase3_agent TEXT,
     status TEXT DEFAULT 'uploaded',
     original_file_url TEXT,
     file_hash TEXT,
-    page_count INTEGER,
-    file_size BIGINT,
+    page_count BIGINT,
     language TEXT,
     raw_text TEXT,
     error_message TEXT,
@@ -241,6 +241,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
+
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS phase3_agent TEXT;
 
 CREATE TABLE IF NOT EXISTS user_profiles (
     id SERIAL PRIMARY KEY,

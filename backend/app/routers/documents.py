@@ -49,7 +49,7 @@ async def upload_document(
     doc_title = title or file.filename
 
     try:
-        file_info = await save_upload_file(file)
+        file_info = await save_upload_file(file, organization_id)
         print(f"[UPLOAD] File saved: {file_info.get('path', '?')} (hash: {file_info.get('file_hash', '?')[:16]}...)")
     except Exception as e:
         logger.error(f"Failed to save upload file: {e}\n{traceback.format_exc()}")
@@ -134,11 +134,7 @@ async def get_document_file(document_id: str, organization_id: str = ""):
         raise HTTPException(status_code=404, detail="File not found")
     if file_path.startswith("http"):
         return RedirectResponse(url=file_path)
-    if os.path.exists(file_path):
-        name = doc.get("title", "document")
-        return FileResponse(file_path, filename=name, media_type="application/octet-stream")
-    filename = os.path.basename(file_path) if file_path else doc.get("title", "document")
-    supabase_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/documents/{filename}"
+    supabase_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/documents/{file_path}"
     return RedirectResponse(url=supabase_url)
 
 
@@ -209,19 +205,23 @@ async def get_document(document_id: str, organization_id: str = ""):
 
 
 class UpdateDocTypeRequest(BaseModel):
-    document_type: str = Field(..., description="New document type")
+    document_type: str = Field(..., description="Document type (invoice, contract, etc.)")
+    phase3_agent: str = Field("", description="Phase 3 agent to use for extraction")
     organization_id: str = Field(..., description="Tenant ID")
 
 
 @router.patch(
     "/{document_id}",
     summary="Update document metadata",
-    description="Update document fields like document_type",
+    description="Update document type and phase3 agent for extraction",
 )
 async def update_document(document_id: str, body: UpdateDocTypeRequest):
     from ..database import SupabaseDB
-    SupabaseDB.update("documents", {"document_type": body.document_type}, "id", document_id)
-    return {"id": document_id, "document_type": body.document_type, "status": "updated"}
+    updates = {"document_type": body.document_type}
+    if body.phase3_agent:
+        updates["phase3_agent"] = body.phase3_agent
+    SupabaseDB.update("documents", updates, "id", document_id)
+    return {"id": document_id, "document_type": body.document_type, "phase3_agent": body.phase3_agent, "status": "updated"}
 
 
 @router.get(

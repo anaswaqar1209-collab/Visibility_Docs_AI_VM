@@ -1,7 +1,6 @@
-import os
 import uuid
 import hashlib
-import aiofiles
+import re
 from pathlib import Path
 from fastapi import UploadFile
 from ..config import settings
@@ -21,11 +20,10 @@ def get_file_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-import re
-
 def generate_unique_filename(original: str) -> str:
-    # Remove null bytes and control chars, replace Windows-invalid chars with _
-    safe = re.sub(r'[\x00-\x1f<>:"/\\|?*]', '_', original)
+    if not original:
+        return f"file_{uuid.uuid4().hex[:8]}"
+    safe = re.sub(r'[^a-zA-Z0-9._-]', '_', original)
     safe = safe.strip().strip('.')
     safe = safe[:200]
     if not safe:
@@ -33,46 +31,33 @@ def generate_unique_filename(original: str) -> str:
     return safe
 
 
-async def save_upload_file(upload_file: UploadFile, upload_dir: str = None) -> dict:
-    if upload_dir is None:
-        upload_dir = settings.UPLOAD_DIR
-
-    os.makedirs(upload_dir, exist_ok=True)
-
+async def save_upload_file(upload_file: UploadFile, organization_id: str = "") -> dict:
     file_data = await upload_file.read()
 
     if len(file_data) > MAX_FILE_SIZE:
         raise ValueError(f"File too large. Max size: {settings.MAX_UPLOAD_SIZE_MB}MB")
 
     filename = generate_unique_filename(upload_file.filename)
+    remote_path = f"{organization_id}/{filename}" if organization_id else filename
 
-    hf_url = hf_storage.upload_bytes(file_data, filename)
-    file_path = ""
-    if hf_url:
-        file_path = hf_url
-    else:
-        file_path = os.path.join(upload_dir, filename)
-        async with aiofiles.open(file_path, "wb") as f:
-            await f.write(file_data)
+    # Upload to HuggingFace
+    hf_url = hf_storage.upload_bytes(file_data, remote_path)
 
+    # Upload to Supabase storage
     supabase_url = ""
     try:
-        SupabaseDB.upload_file("documents", filename, file_data, upload_file.content_type)
-        supabase_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/documents/{filename}"
+        SupabaseDB.upload_file("documents", remote_path, file_data, upload_file.content_type)
+        supabase_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/documents/{remote_path}"
     except Exception:
         pass
 
     return {
-        "filename": filename,
+        "org_id": organization_id,
+        "filename": remote_path,
         "original_name": upload_file.filename,
-        "file_path": file_path,
+        "file_path": hf_url or supabase_url,
         "file_size": len(file_data),
         "file_hash": get_file_hash(file_data),
         "content_type": upload_file.content_type or "application/octet-stream",
         "supabase_url": supabase_url or hf_url,
     }
-
-
-def ensure_dirs():
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    os.makedirs(settings.PROCESSED_DIR, exist_ok=True)

@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from .orchestration_logger import get_logger, C
 
 logger = logging.getLogger("visibility-docs")
 
@@ -41,6 +42,8 @@ DOCUMENT_TO_PHASE3_AGENT = {
     "maintenance_report": "compliance_agent",
     "sop": "compliance_agent",
     "engineering_drawing": "compliance_agent",
+    "resume": "hr_agent",
+    "transcript": "hr_agent",
     "other": "other_agent",
 }
 
@@ -51,42 +54,134 @@ HEURISTIC_RULES = [
         "finance_agent",
         "invoice",
         [
-            "invoice", "subtotal", "tax", "total", "amount due", "due date", "receipt",
-            "balance", "payment", "currency", "bank details", "financial statement",
-            "profit and loss", "p&l", "revenue",
+            "invoice", "subtotal", "tax", "total", "amount due", "due date",
+            "invoice #", "inv-", "tax invoice", "bill to", "ship to",
+            "payment terms", "net 30", "unit price", "quantity", "line items",
+            "gst", "grand total",
+        ],
+    ),
+    (
+        "finance_agent",
+        "financial_statement",
+        [
+            "balance sheet", "income statement", "profit & loss", "p&l",
+            "cash flow", "assets", "liabilities", "equity", "revenue",
+            "expenses", "net profit", "gross margin", "operating income",
+            "financial summary", "financial statement",
         ],
     ),
     (
         "procurement_agent",
         "purchase_order",
         [
-            "purchase order", "po number", "quotation", "supplier", "vendor", "requisition",
-            "delivery date", "incoterms", "order quantity", "line items", "buyer",
+            "purchase order", "po number", "po-", "order date", "supplier",
+            "vendor", "delivery date", "ship to", "requisition",
+            "payment terms", "net 30", "order quantity", "buyer",
+        ],
+    ),
+    (
+        "procurement_agent",
+        "quotation",
+        [
+            "quotation", "quote", "quotation #", "price list", "valid until",
+            "offer", "estimate", "proposal", "unit price",
         ],
     ),
     (
         "hr_agent",
         "hr_document",
         [
-            "employee", "salary", "appraisal", "leave", "offer letter", "hr policy",
-            "payroll", "designation", "department", "training", "manager",
+            "employee", "salary", "appraisal", "leave application",
+            "offer letter", "hr policy", "payroll", "designation",
+            "department", "training", "manager", "employee id",
+            "performance review", "appointment letter",
         ],
     ),
     (
         "legal_agent",
         "contract",
         [
-            "contract", "agreement", "party a", "party b", "nda", "governing law",
-            "jurisdiction", "clause", "termination", "renewal", "signature",
+            "contract", "agreement", "party a", "party b", "nda",
+            "governing law", "jurisdiction", "clause", "termination",
+            "renewal", "signature", "whereas", "in witness whereof",
+            "indemnity", "confidentiality", "lease agreement",
+            "service agreement", "binding", "executed",
+        ],
+    ),
+    (
+        "hr_agent",
+        "resume",
+        [
+            "resume", "cv", "curriculum vitae", "work experience",
+            "education", "skills", "professional summary",
+            "employment history", "qualifications", "achievements",
+            "certifications", "objective",
         ],
     ),
     (
         "compliance_agent",
         "audit_report",
         [
-            "audit", "certificate", "sop", "standard operating procedure", "quality report",
-            "maintenance", "inspection", "non-conformance", "corrective action", "compliance",
-            "finding", "recommendation", "regulation",
+            "audit report", "audit findings", "observations",
+            "non-conformance", "corrective action", "finding",
+            "critical", "major", "minor", "recommendations",
+            "auditor", "scope", "compliance status",
+        ],
+    ),
+    (
+        "compliance_agent",
+        "quality_report",
+        [
+            "quality report", "quality control", "qc", "quality assurance",
+            "qa", "inspection report", "defect", "pass rate", "fail rate",
+            "specification", "tolerance", "quality metrics",
+        ],
+    ),
+    (
+        "compliance_agent",
+        "certificate",
+        [
+            "certificate", "certification", "certificate of",
+            "this certifies", "cert no", "certificate of analysis",
+            "certificate of origin", "certificate of compliance",
+            "iso certificate", "certifying body",
+        ],
+    ),
+    (
+        "compliance_agent",
+        "maintenance_report",
+        [
+            "maintenance", "service report", "repair", "equipment",
+            "downtime", "technician", "work order", "breakdown",
+            "fault", "servicing", "preventive maintenance",
+        ],
+    ),
+    (
+        "compliance_agent",
+        "sop",
+        [
+            "standard operating procedure", "sop", "procedure",
+            "steps", "instructions", "protocol", "step-by-step",
+            "operating procedure", "process guide",
+        ],
+    ),
+    (
+        "compliance_agent",
+        "engineering_drawing",
+        [
+            "drawing", "dwg", "schematic", "dimension", "tolerance",
+            "scale", "revision", "title block", "part no",
+            "drawn by", "checked by", "blueprint", "datum",
+        ],
+    ),
+    (
+        "hr_agent",
+        "transcript",
+        [
+            "transcript", "grade", "gpa", "semester", "course",
+            "credit hours", "cgpa", "academic record", "marksheet",
+            "marks sheet", "result card", "examination", "credits earned",
+            "grade point", "student name", "roll number", "registration no",
         ],
     ),
 ]
@@ -107,7 +202,7 @@ class ClassificationAgent:
         if not best:
             return {
                 "document_type": "other",
-                "agent_type": "compliance_agent",
+                "agent_type": "other_agent",
                 "confidence": 0.15,
                 "reasoning": "Heuristic fallback did not find a strong match",
                 "language": "en",
@@ -128,22 +223,24 @@ class ClassificationAgent:
     def classify(self, text: str, filename: str = "") -> dict:
         from .groq_service import groq_service
 
-        print(f"[CLASSIFY] Classifying document: {filename} (text: {len(text)} chars)")
+        log = get_logger()
+        log.info(f"Text: {len(text)} chars")
         prompt_template = _load_prompt("classification_agent.md")
         if not prompt_template:
-            print(f"[CLASSIFY] No prompt template found, using heuristic")
+            log.warn("No prompt template found, using heuristic fallback")
             return self._heuristic_classify(text, filename)
 
         prompt = prompt_template.replace("{text}", text[:64000]).replace("{filename}", filename)
         try:
             t0 = __import__("time").time()
+            log.info("Calling Groq API (llama-8b)...")
             result = groq_service._parse_json(
                 groq_service.chat([{"role": "user", "content": prompt}], temperature=0.05, max_tokens=2048),
                 {},
             )
             duration = __import__("time").time() - t0
             if not result:
-                print(f"[CLASSIFY] LLM returned empty, falling back to heuristic")
+                log.warn(f"LLM returned empty ({duration:.1f}s), falling back to heuristic")
                 return self._heuristic_classify(text, filename)
             doc_type = str(result.get("document_type", "other")).lower().replace(" ", "_")
             agent_type = str(result.get("phase3_agent", "")).lower().replace(" ", "_")
@@ -151,13 +248,13 @@ class ClassificationAgent:
             from ..models.schemas import DocumentType
             valid_types = {t.value for t in DocumentType}
             if doc_type not in valid_types:
-                print(f"[CLASSIFY] Invalid doc_type '{doc_type}' from LLM, falling back to 'other'")
+                log.warn(f"Invalid doc_type '{doc_type}' from LLM, falling back to 'other'")
                 doc_type = "other"
 
             if agent_type not in VALID_PHASE3_AGENTS:
                 old_agent = agent_type
                 agent_type = DOCUMENT_TO_PHASE3_AGENT.get(doc_type, "other_agent")
-                print(f"[CLASSIFY] Invalid agent '{old_agent}' from LLM, mapped to '{agent_type}' for type '{doc_type}'")
+                log.warn(f"Invalid agent '{old_agent}' from LLM → mapped to '{agent_type}' for '{doc_type}'")
 
             result_data = {
                 "document_type": doc_type,
@@ -167,10 +264,10 @@ class ClassificationAgent:
                 "language": result.get("language", "en"),
                 "estimated_quality": result.get("estimated_quality", "medium"),
             }
-            print(f"[CLASSIFY] Result: type={doc_type}, agent={agent_type}, conf={result_data['confidence']:.2f}, lang={result_data['language']}, time={duration:.1f}s")
+            log.result("Result", f"type={doc_type}, agent={agent_type}, conf={result_data['confidence']:.2f}, time={duration:.1f}s", C.GREEN)
             return result_data
         except Exception as e:
-            print(f"[CLASSIFY] LLM classification error: {e}, falling back to heuristic")
+            log.warn(f"LLM error: {e}, falling back to heuristic")
             logger.warning(f"Classification agent fallback used: {e}")
             fallback = self._heuristic_classify(text, filename)
             fallback["reasoning"] = f"{fallback['reasoning']}; LLM fallback reason: {e}"
@@ -182,14 +279,15 @@ class CategoryExtractionAgent:
         from .groq_service import groq_service
 
         agent = agent_type or DOCUMENT_TO_PHASE3_AGENT.get(document_type, "other_agent")
-        print(f"[EXTRACT] Agent: {agent} | DocType: {document_type} | Text: {len(text)} chars")
+        log = get_logger()
+        log.info(f"DocType: {document_type} | Text: {len(text)} chars")
         prompt_template = _load_phase3_prompt(f"{agent}.md")
         if not prompt_template:
-            print(f"[EXTRACT] No prompt found for agent '{agent}', returning empty")
+            log.warn(f"No prompt found for agent '{agent}', returning empty")
             return {"extracted_data": {}, "confidence": 0.0}
 
         prompt = prompt_template.replace("{text}", text[:64000] if text else "")
-        print(f"[EXTRACT] Prompt loaded ({len(prompt_template)} chars), sending to LLM...")
+        log.info(f"Prompt loaded ({len(prompt_template)} chars), calling Groq API...")
 
         try:
             t0 = __import__("time").time()
@@ -203,7 +301,9 @@ class CategoryExtractionAgent:
                 scores = [v for v in field_confidence.values() if isinstance(v, (int, float))]
                 avg_confidence = sum(scores) / len(scores) if scores else 0.7
             fields = list(result.keys()) if isinstance(result, dict) else []
-            print(f"[EXTRACT] Result: agent={agent}, fields={fields[:8]}, conf={avg_confidence:.2f}, time={duration:.1f}s")
+            log.result("Fields", f"{fields[:8]}", C.GREEN)
+            log.result("Confidence", f"{avg_confidence:.2f}", C.GREEN)
+            log.result("Duration", f"{duration:.1f}s", C.DIM)
             return {
                 "extracted_data": result if isinstance(result, dict) else {},
                 "confidence": avg_confidence,
@@ -211,7 +311,7 @@ class CategoryExtractionAgent:
                 "agent_type": agent,
             }
         except Exception as e:
-            print(f"[EXTRACT] FAILED: {e}")
+            log.fail(f"Extraction failed: {e}")
             import traceback as tb
             tb.print_exc()
             logger.error(f"Category extraction agent ({document_type}) error: {e}")
