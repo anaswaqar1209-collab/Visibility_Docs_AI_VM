@@ -34,9 +34,6 @@ async def lifespan(app: FastAPI):
         _get_supabase()
         # Load embedding model FIRST (before PaddleOCR) to avoid torch DLL conflict
         _warmup_embedding()
-        # Pre-warm PaddleOCR synchronously so first request is fast
-        from .services.ocr_service import ocr_service
-        ocr_service.warm()
         logger.info("Startup complete")
     except Exception as e:
         logger.warning(f"Startup error (non-fatal): {e}")
