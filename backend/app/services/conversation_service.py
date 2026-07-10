@@ -2,7 +2,8 @@ import time
 import logging
 from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
+from langchain_core.prompts.chat import SystemMessagePromptTemplate
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_groq import ChatGroq
 from ..config import settings
@@ -46,11 +47,18 @@ class ConversationService:
             return
 
         sp = system_prompt or SYSTEM_PROMPT
-        prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content=sp),
-            MessagesPlaceholder(variable_name="history"),
-            ("human", "Document Context:\n{context}\n\nQuestion: {question}"),
-        ])
+        if sp == SYSTEM_PROMPT or "{" not in sp:
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", sp),
+                MessagesPlaceholder(variable_name="history"),
+                ("human", "Document Context:\n{context}\n\nQuestion: {question}"),
+            ])
+        else:
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", SYSTEM_PROMPT),
+                MessagesPlaceholder(variable_name="history"),
+                ("human", "Agent Instructions:\n{agent_instructions}\n\nDocument Context:\n{context}\n\nQuestion: {question}"),
+            ])
 
         self._chain = prompt | self.llm
 
@@ -104,13 +112,24 @@ class ConversationService:
         config = {"configurable": {"session_id": session_id or "default"}} if session_id else \
                  {"configurable": {"session_id": "default"}}
 
+        # Build chain inputs based on whether we have agent instructions
+        chain_inputs = {"question": question}
+
         if system_prompt:
             changed = self.update_system_prompt(system_prompt)
             if changed:
                 chat_log.info(f"System prompt updated to agent-specific prompt ({len(system_prompt)} chars)")
 
+        if system_prompt and "{" in system_prompt:
+            # Agent prompt has {text}/{filename} — pass as agent_instructions instead
+            chain_inputs["agent_instructions"] = system_prompt
+            chain_inputs["context"] = context
+        else:
+            chain_inputs["context"] = context
+
         if is_followup and not context:
             context = self.get_last_context(session_id)
+            chain_inputs["context"] = context
             chat_log.info(f"No new context — reusing previous session context ({len(context)} chars)")
 
         if context:
@@ -120,7 +139,7 @@ class ConversationService:
         _logger.info(f"[CHAT] session={session_id}, context_len={len(context)}, is_followup={is_followup}")
         t0 = time.time()
         response = self._chain_with_history.invoke(
-            {"context": context, "question": question},
+            chain_inputs,
             config=config,
         )
         duration = time.time() - t0
