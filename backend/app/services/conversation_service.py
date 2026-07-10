@@ -36,16 +36,18 @@ class ConversationService:
         self._chain = None
         self._chain_with_history = None
         self._last_context: dict[str, str] = {}
-        self._setup_chain()
+        self._current_system_prompt = SYSTEM_PROMPT
+        self._setup_chain(self._current_system_prompt)
 
-    def _setup_chain(self):
+    def _setup_chain(self, system_prompt: str = None):
         if not self.llm:
             self._chain = None
             self._chain_with_history = None
             return
 
+        sp = system_prompt or SYSTEM_PROMPT
         prompt = ChatPromptTemplate.from_messages([
-            ("system", SYSTEM_PROMPT),
+            ("system", sp),
             MessagesPlaceholder(variable_name="history"),
             ("human", "Document Context:\n{context}\n\nQuestion: {question}"),
         ])
@@ -58,6 +60,14 @@ class ConversationService:
             input_messages_key="question",
             history_messages_key="history",
         )
+
+    def update_system_prompt(self, prompt_text: str):
+        """Rebuild the chain with a new system prompt (e.g. an agent .md file)."""
+        if prompt_text and prompt_text != self._current_system_prompt:
+            self._current_system_prompt = prompt_text
+            self._setup_chain(prompt_text)
+            return True
+        return False
 
     def load_history_from_db(self, session_id: str, messages: list[dict]):
         """Seed in-memory history from DB messages for this session."""
@@ -85,13 +95,19 @@ class ConversationService:
     def get_last_context(self, session_id: str) -> str:
         return self._last_context.get(session_id, "")
 
-    def chat(self, question: str, context: str, session_id: str = None, is_followup: bool = False) -> str:
+    def chat(self, question: str, context: str, session_id: str = None, is_followup: bool = False,
+             system_prompt: str = None) -> str:
         if not self._chain_with_history:
             return "Groq API is not configured."
 
         chat_log = get_chat_logger()
         config = {"configurable": {"session_id": session_id or "default"}} if session_id else \
                  {"configurable": {"session_id": "default"}}
+
+        if system_prompt:
+            changed = self.update_system_prompt(system_prompt)
+            if changed:
+                chat_log.info(f"System prompt updated to agent-specific prompt ({len(system_prompt)} chars)")
 
         if is_followup and not context:
             context = self.get_last_context(session_id)

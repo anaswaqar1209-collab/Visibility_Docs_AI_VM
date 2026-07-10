@@ -3,6 +3,7 @@ from .conversation_service import conversation_service
 from .rag_service import rag_service
 from ..database import SupabaseDB
 from .orchestration_logger import get_chat_logger, C
+from .agent_orchestrator import _load_phase3_prompt, _load_prompt, DOCUMENT_TO_PHASE3_AGENT, PHASE3_AGENT_PROMPT_MAP
 
 
 class ChatService:
@@ -108,10 +109,24 @@ class ChatService:
             agent_tag = f" [{p3a}]" if p3a else ""
             chat_log.source_item(i, s["document_title"], s.get("document_type", "") + agent_tag, s["score"])
 
+        # ── Load agent-specific .md prompt ──
+        agent_counts = {}
+        for r in search_results:
+            p3a = r.get("phase3_agent") or DOCUMENT_TO_PHASE3_AGENT.get(r.get("document_type", ""), "other_agent")
+            agent_counts[p3a] = agent_counts.get(p3a, 0) + 1
+        dominant_agent = max(agent_counts, key=agent_counts.get) if agent_counts else "other_agent"
+        prompt_path = PHASE3_AGENT_PROMPT_MAP.get(dominant_agent, "phase3/other.md")
+        agent_prompt = _load_prompt(prompt_path)
+        if agent_prompt:
+            prompt_display = prompt_path.replace("\\", "/")
+            chat_log.info(f"Loaded agent prompt: {C.DIM}{prompt_display}{C.RESET} ({len(agent_prompt)} chars)")
+            chat_log.info(f"Agent prompt preview: {C.DIM}{agent_prompt[:180].replace(chr(10), ' ')}...{C.RESET}")
+
         chat_log.llm_call("llama-3.3-70b-versatile", context_len, len(question), len(sources))
         llm_t0 = time.time()
         is_followup = not is_first
-        answer = conversation_service.chat(question, context, session_id=sid, is_followup=is_followup)
+        answer = conversation_service.chat(question, context, session_id=sid, is_followup=is_followup,
+                                            system_prompt=agent_prompt)
         chat_log.llm_response(time.time() - llm_t0, len(answer))
 
         history = conversation_service.get_history(sid)
