@@ -142,11 +142,22 @@ export default function Home() {
 function loadSeen(): Set<string> { try { const r = localStorage.getItem("sc"); return new Set(r ? JSON.parse(r) : []); } catch { return new Set(); } }
 function saveSeen(id: string) { try { const r = localStorage.getItem("sc"); const a: string[] = r ? JSON.parse(r) : []; if (!a.includes(id)) { a.push(id); localStorage.setItem("sc", JSON.stringify(a)); } } catch {} }
 
+const AGENT_OPTIONS = [
+  { value: "", label: "All Agents" },
+  { value: "finance_agent", label: "💰 Finance Agent" },
+  { value: "procurement_agent", label: "📦 Procurement Agent" },
+  { value: "hr_agent", label: "👨‍💼 HR Agent" },
+  { value: "legal_agent", label: "⚖️ Legal Agent" },
+  { value: "compliance_agent", label: "✅ Compliance Agent" },
+  { value: "other_agent", label: "❓ Other Agent" },
+];
+
 function AllDocumentsPage({ showToast, orgId, token }: any) {
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [search, setSearch] = useState("");
+  const [agentFilter, setAgentFilter] = useState("");
   const [classifyQueue, setClassifyQueue] = useState<any[]>([]);
   const classifyQueueRef = useRef<any[]>([]);
   const seen = useRef<Set<string>>(loadSeen());
@@ -215,15 +226,17 @@ function AllDocumentsPage({ showToast, orgId, token }: any) {
     }
   };
 
-  const filtered = docs.filter((d: any) =>
-    (d.title || "").toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = docs.filter((d: any) => {
+    const matchSearch = (d.title || "").toLowerCase().includes(search.toLowerCase());
+    const matchAgent = !agentFilter || d.phase3_agent === agentFilter;
+    return matchSearch && matchAgent;
+  });
 
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* document list */}
       <div className="w-[420px] shrink-0 flex flex-col border-r border-slate-200/50 bg-white">
-        <div className="p-4 pb-3">
+        <div className="p-4 pb-1.5">
           <div className="relative">
             <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -231,6 +244,17 @@ function AllDocumentsPage({ showToast, orgId, token }: any) {
             <input value={search} onChange={e => setSearch(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all"
               placeholder="Search documents..." />
+          </div>
+        </div>
+        <div className="px-4 pb-3">
+          <div className="relative">
+            <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs appearance-none cursor-pointer outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all text-slate-600">
+              {AGENT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
           </div>
         </div>
         <UploadBox onUpload={() => { load(); showToast("Document uploaded successfully ✨"); }} />
