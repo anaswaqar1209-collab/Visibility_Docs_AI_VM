@@ -58,6 +58,16 @@ const TypingDots = () => (
   </div>
 );
 
+const AGENT_OPTIONS = [
+  { value: "", label: "All Agents" },
+  { value: "finance_agent", label: "💰 Finance Agent" },
+  { value: "procurement_agent", label: "📦 Procurement Agent" },
+  { value: "hr_agent", label: "👨‍💼 HR Agent" },
+  { value: "legal_agent", label: "⚖️ Legal Agent" },
+  { value: "compliance_agent", label: "✅ Compliance Agent" },
+  { value: "other_agent", label: "❓ Other Agent" },
+];
+
 /* ───────────── main page ───────────── */
 export default function Home() {
   const router = useRouter();
@@ -65,6 +75,7 @@ export default function Home() {
   const [tab, setTab] = useState<"chat" | "docs">("chat");
   const [toast, setToast] = useState("");
   const [selectedChatDocs, setSelectedChatDocs] = useState<any[]>([]);
+  const [agentFilter, setAgentFilter] = useState("");
 
   const showToast = useCallback((m: string) => { setToast(m); setTimeout(() => setToast(""), 3000); }, []);
 
@@ -120,9 +131,11 @@ export default function Home() {
 
       <div className="flex-1 flex overflow-hidden">
         {tab === "docs" ? (
-          <AllDocumentsPage showToast={showToast} orgId={orgId} token={token} />
+          <AllDocumentsPage showToast={showToast} orgId={orgId} token={token}
+            agentFilter={agentFilter} setAgentFilter={setAgentFilter} />
         ) : (
-          <ChatSection showToast={showToast} selectedDocs={selectedChatDocs} setSelectedDocs={setSelectedChatDocs} orgId={orgId} token={token} />
+          <ChatSection showToast={showToast} selectedDocs={selectedChatDocs} setSelectedDocs={setSelectedChatDocs}
+            orgId={orgId} token={token} agentFilter={agentFilter} />
         )}
       </div>
 
@@ -142,22 +155,11 @@ export default function Home() {
 function loadSeen(): Set<string> { try { const r = localStorage.getItem("sc"); return new Set(r ? JSON.parse(r) : []); } catch { return new Set(); } }
 function saveSeen(id: string) { try { const r = localStorage.getItem("sc"); const a: string[] = r ? JSON.parse(r) : []; if (!a.includes(id)) { a.push(id); localStorage.setItem("sc", JSON.stringify(a)); } } catch {} }
 
-const AGENT_OPTIONS = [
-  { value: "", label: "All Agents" },
-  { value: "finance_agent", label: "💰 Finance Agent" },
-  { value: "procurement_agent", label: "📦 Procurement Agent" },
-  { value: "hr_agent", label: "👨‍💼 HR Agent" },
-  { value: "legal_agent", label: "⚖️ Legal Agent" },
-  { value: "compliance_agent", label: "✅ Compliance Agent" },
-  { value: "other_agent", label: "❓ Other Agent" },
-];
-
-function AllDocumentsPage({ showToast, orgId, token }: any) {
+function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter }: any) {
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
   const [search, setSearch] = useState("");
-  const [agentFilter, setAgentFilter] = useState("");
   const [classifyQueue, setClassifyQueue] = useState<any[]>([]);
   const classifyQueueRef = useRef<any[]>([]);
   const seen = useRef<Set<string>>(loadSeen());
@@ -226,9 +228,12 @@ function AllDocumentsPage({ showToast, orgId, token }: any) {
     }
   };
 
+  const getDocAgent = (d: any) =>
+    d.phase3_agent || DOC_TYPE_TO_AGENT[d.document_type] || "other_agent";
+
   const filtered = docs.filter((d: any) => {
     const matchSearch = (d.title || "").toLowerCase().includes(search.toLowerCase());
-    const matchAgent = !agentFilter || d.phase3_agent === agentFilter;
+    const matchAgent = !agentFilter || getDocAgent(d) === agentFilter;
     return matchSearch && matchAgent;
   });
 
@@ -592,7 +597,7 @@ function DocDetail({ doc, showToast, onDelete }: any) {
 /* ════════════════════════════════════════
    CHAT SECTION
    ════════════════════════════════════════ */
-function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token }: any) {
+function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, agentFilter }: any) {
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -649,7 +654,9 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token }:
     setDocQuery(q);
     if (!q.trim()) { setDocs([]); return; }
     try {
-      const r = await authFetch(token, `${API}/api/v1/documents?q=${encodeURIComponent(q)}&limit=10&organization_id=${orgId}`);
+      let url = `${API}/api/v1/documents?q=${encodeURIComponent(q)}&limit=10&organization_id=${orgId}`;
+      if (agentFilter) url += `&phase3_agent=${encodeURIComponent(agentFilter)}`;
+      const r = await authFetch(token, url);
       const d = await r.json();
       setDocs(d?.documents || d || []);
     } catch { }

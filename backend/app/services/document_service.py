@@ -62,8 +62,10 @@ class DocumentService:
             return data[0]
         return data if isinstance(data, dict) else None
 
-    def list_documents(self, organization_id: str, limit: int = 50, offset: int = 0, search: str = "") -> list[dict]:
+    def list_documents(self, organization_id: str, limit: int = 50, offset: int = 0, search: str = "", phase3_agent: str = "") -> list[dict]:
         filters = {"organization_id": organization_id}
+        if phase3_agent:
+            filters["phase3_agent"] = phase3_agent
         like = {"title": search} if search else None
         result = SupabaseDB.select("documents", filters=filters, like=like, limit=limit, offset=offset)
         data = getattr(result, "data", result if isinstance(result, list) else [])

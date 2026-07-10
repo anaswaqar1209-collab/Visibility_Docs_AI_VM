@@ -230,8 +230,8 @@ async def update_document(document_id: str, body: UpdateDocTypeRequest):
     summary="List documents",
     description="List all documents for an organization. Use q to search by title.",
 )
-async def list_documents(organization_id: str = "", q: str = "", limit: int = 50, offset: int = 0):
-    docs = document_service.list_documents(organization_id, limit, offset, search=q)
+async def list_documents(organization_id: str = "", q: str = "", phase3_agent: str = "", limit: int = 50, offset: int = 0):
+    docs = document_service.list_documents(organization_id, limit, offset, search=q, phase3_agent=phase3_agent)
     return DocumentListResponse(documents=docs, total=len(docs))
 
 
