@@ -346,6 +346,39 @@ async def delete_document(document_id: str, organization_id: str = ""):
     return document_service.delete_document(document_id, organization_id)
 
 
+@router.get(
+    "/image/{path:path}",
+    summary="Serve extracted image file",
+    description="Returns an image file from the uploads/images directory",
+)
+async def serve_image(path: str):
+    from fastapi.responses import FileResponse
+    full_path = os.path.join(settings.UPLOAD_DIR, path)
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(full_path, media_type="image/jpeg")
+
+
+@router.get(
+    "/{document_id}/images",
+    summary="Get detected images with descriptions",
+    description="Return images extracted from the document with their Vision-generated descriptions",
+)
+async def get_document_images(document_id: str, organization_id: str = ""):
+    result = SupabaseDB.select("document_extractions", filters={
+        "document_id": document_id,
+        "organization_id": organization_id,
+        "extraction_type": "image_extraction",
+    })
+    data = getattr(result, "data", result if isinstance(result, list) else [])
+    images = []
+    if isinstance(data, list) and data:
+        extracted = data[0].get("extracted_data", {})
+        images = extracted.get("images", [])
+    desc_url = f"/api/v1/documents/image/images/{document_id}/descriptions.txt" if images else ""
+    return {"images": images, "descriptions_file": desc_url}
+
+
 @router.post(
     "/classify-text",
     summary="Classify document text",

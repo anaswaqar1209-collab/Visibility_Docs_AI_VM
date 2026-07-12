@@ -1,3 +1,4 @@
+import os
 import time
 import logging
 from datetime import datetime
@@ -22,6 +23,7 @@ STAGE_ORDER = [
     "extracted",
     "embedding",
     "embedded",
+    "image_extraction",
     "completed",
 ]
 
@@ -223,7 +225,7 @@ class OrchestratorService:
 
             log = reset_logger(doc.get("title", document_id), doc_id=document_id)
             log.start()
-            log.set_total_steps(7)
+            log.set_total_steps(8)
 
             # ── Step 1: File Resolution ──
             log.step("FILE RESOLUTION")
@@ -385,6 +387,54 @@ class OrchestratorService:
             })
             self.update_stage(document_id, organization_id, "extracted", 80)
             self.update_stage(document_id, organization_id, "embedded", 95)
+
+            # ── Stage 7: Image Extraction & Indexing (separate from text pipeline) ──
+            log.step("IMAGE EXTRACTION")
+            log.agent_call("image_extraction_service", "", "Groq Vision")
+            ext = os.path.splitext(file_path)[1].lower()
+            image_results = []
+            if ext == ".pdf":
+                try:
+                    from .image_extraction_service import image_extraction_service
+                    images = image_extraction_service.process_pdf_images(file_path, document_id, organization_id)
+                    if images:
+                        log.ok(f"Extracted {len(images)} images")
+                        for img in images:
+                            rag_service.index_image_content(
+                                img["markdown"],
+                                document_id,
+                                organization_id,
+                                img["metadata"],
+                            )
+                            image_results.append({
+                                "page": img["metadata"]["page_number"],
+                                "image_path": img["metadata"].get("image_path", ""),
+                                "description": img["markdown"],
+                            })
+                        log.ok(f"Indexed {len(images)} image descriptions")
+                        SupabaseDB.insert("document_extractions", {
+                            "organization_id": organization_id,
+                            "document_id": document_id,
+                            "extraction_type": "image_extraction",
+                            "extracted_data": {"images": image_results},
+                            "confidence": 1.0,
+                        })
+
+                        # Append image descriptions to raw_text so OCR preview shows them
+                        image_text = "\n\n" + "=" * 50 + "\nIMAGE DESCRIPTIONS\n" + "=" * 50 + "\n\n"
+                        for ir in image_results:
+                            image_text += f"--- Image (Page {ir['page']}) ---\n"
+                            image_text += ir["description"]
+                            image_text += "\n\n"
+                        SupabaseDB.update("documents", {"raw_text": (raw_text or "") + image_text}, "id", document_id)
+                        log.ok(f"Appended {len(image_results)} image descriptions to raw_text")
+                    else:
+                        log.ok("No images found in PDF")
+                except Exception as e:
+                    log.warn(f"Image extraction failed (non-fatal): {e}")
+                    logger.warning(f"Image extraction error for {document_id}: {e}")
+            else:
+                log.ok("Skipped (not a PDF)")
 
             # ── Mark complete ──
             SupabaseDB.update("documents", {"status": "processed"}, "id", document_id)

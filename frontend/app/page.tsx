@@ -255,6 +255,7 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
     d.phase3_agent || DOC_TYPE_TO_AGENT[d.document_type] || "other_agent";
 
   const filtered = docs.filter((d: any) => {
+    if (d.status !== "processed" && d.status !== "failed" && d.status !== "error") return false;
     const matchSearch = (d.title || "").toLowerCase().includes(search.toLowerCase());
     const matchAgent = !agentFilter || getDocAgent(d) === agentFilter;
     return matchSearch && matchAgent;
@@ -470,7 +471,7 @@ function UploadBox({ onUpload }: any) {
         const done: string[] = [];
         for (const id of Array.from(pendingIds.current)) {
           const doc = allDocs.find((x: any) => x.id === id);
-          if (doc && (doc.status === "embedded" || doc.status === "processed" || doc.status === "classified" || doc.status === "failed" || doc.status === "error")) {
+          if (doc && (doc.status === "processed" || doc.status === "failed" || doc.status === "error")) {
             done.push(id);
           }
         }
@@ -535,10 +536,14 @@ function UploadBox({ onUpload }: any) {
 function DocDetail({ doc, showToast, onDelete }: any) {
   const { orgId, token } = useAuth();
   const [similar, setSimilar] = useState<any[]>([]);
+  const [images, setImages] = useState<any[]>([]);
+  const [descFileUrl, setDescFileUrl] = useState("");
 
   useEffect(() => {
     authFetch(token, `${API}/api/v1/search/similar/${doc.id}?organization_id=${orgId}`)
       .then(r => r.json()).then(d => setSimilar(d?.results || d || [])).catch(() => {});
+    authFetch(token, `${API}/api/v1/documents/${doc.id}/images?organization_id=${orgId}`)
+      .then(r => r.json()).then(d => { setImages(d?.images || []); setDescFileUrl(d?.descriptions_file || ""); }).catch(() => {});
   }, [doc.id]);
 
   const del = async () => {
@@ -593,9 +598,34 @@ function DocDetail({ doc, showToast, onDelete }: any) {
         <details className="bg-white rounded-xl border border-slate-200 mb-6 overflow-hidden">
           <summary className="px-4 py-3 text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-50 transition-colors">
             OCR Preview ({doc.raw_text.length.toLocaleString()} chars)
+            {descFileUrl && (
+              <a href={`${API}${descFileUrl}`} target="_blank" onClick={e => e.stopPropagation()}
+                className="ml-3 text-xs text-blue-500 hover:text-blue-700 underline">
+                Download All Descriptions
+              </a>
+            )}
           </summary>
-          <div className="max-h-64 overflow-y-auto p-4 bg-slate-50 text-xs text-slate-600 font-mono leading-relaxed whitespace-pre-wrap">
-            {doc.raw_text.slice(0, 3000)}
+          <div className="max-h-96 overflow-y-auto p-4 bg-slate-50 text-xs text-slate-600 font-mono leading-relaxed whitespace-pre-wrap">
+            {doc.raw_text.slice(0, 10000)}
+          </div>
+        </details>
+      )}
+
+      {images.length > 0 && (
+        <details className="bg-white rounded-xl border border-slate-200 mb-6 overflow-hidden">
+          <summary className="px-4 py-3 text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-50 transition-colors">
+            Image Previews ({images.length})
+          </summary>
+          <div className="divide-y divide-slate-100">
+            {images.map((img: any, i: number) => (
+              <div key={i} className="p-4">
+                <p className="text-xs font-medium text-slate-400 mb-1">Page {img.page}</p>
+                {img.image_path && (
+                  <img src={`${API}/api/v1/documents/image/${img.image_path}`} alt={`Page ${img.page}`}
+                    className="max-h-48 rounded-lg border border-slate-200 mb-2 object-contain bg-slate-50" />
+                )}
+              </div>
+            ))}
           </div>
         </details>
       )}

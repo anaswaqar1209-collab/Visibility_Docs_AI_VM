@@ -568,6 +568,69 @@ class RAGService:
         except Exception as e:
             print(f"[INDEX] DB save FAILED: {e}")
 
+    def index_image_content(self, markdown: str, document_id: str, organization_id: str, image_metadata: dict = None):
+        if not markdown.strip():
+            return
+
+        meta = image_metadata or {}
+        page_num = meta.get("page_number", 1)
+        heading = f"Figure Page {page_num}"
+
+        chunk_text = markdown.strip()
+        chunk_id = hashlib.md5(chunk_text.encode()).hexdigest()
+
+        embedding = embedding_service.embed_text(chunk_text)
+        print(f"[IMAGE-INDEX] Embedded image {meta.get('image_id','?')}: dim={len(embedding)}")
+
+        try:
+            enriched_meta = {
+                "chunk_index": 0,
+                "word_count": len(chunk_text.split()),
+                "heading": heading,
+                "image_id": meta.get("image_id", ""),
+                "image_path": meta.get("image_path", ""),
+                "page_number": page_num,
+                "image_index": meta.get("image_index", 0),
+                "chunk_type": "image",
+                "source": "vision_image",
+            }
+            chunk_rec = {
+                "organization_id": organization_id,
+                "document_id": document_id,
+                "page_id": page_num,
+                "chunk_index": 0,
+                "chunk_type": "image",
+                "heading": heading,
+                "content": chunk_text,
+                "chunk_text": chunk_text,
+                "metadata": enriched_meta,
+            }
+            emb_rec = {
+                "organization_id": organization_id,
+                "document_id": document_id,
+                "embedding": embedding,
+                "model_name": "all-MiniLM-L6-v2",
+            }
+            SupabaseDB.insert("document_chunks", chunk_rec)
+            SupabaseDB.insert("document_embeddings", emb_rec)
+            print(f"[IMAGE-INDEX] Saved image chunk + embedding to DB")
+
+            # Also upsert to Pinecone
+            if pinecone_service.available:
+                vid = f"{document_id}_{chunk_id}"
+                pinecone_service.upsert([(vid, embedding, {
+                    "document_id": document_id,
+                    "organization_id": organization_id,
+                    "chunk_index": 0,
+                    "chunk_type": "image",
+                    "chunk_text": chunk_text[:1000],
+                    "image_id": meta.get("image_id", ""),
+                    "page_number": page_num,
+                })], namespace=organization_id)
+                print(f"[IMAGE-INDEX] Upserted to Pinecone")
+        except Exception as e:
+            print(f"[IMAGE-INDEX] DB save FAILED: {e}")
+
     def _fetch_doc_titles(self, doc_ids: list[str], org_id: str) -> dict:
         titles = {}
         if not doc_ids:
@@ -599,7 +662,7 @@ class RAGService:
         results = []
         seen_ids = set()
         import re
-        query_words = [w for w in re.sub(r'[^\w\s]', ' ', query).lower().split() if len(w) > 2]
+        query_words = [w for w in re.sub(r'[^\w\s]', ' ', query).lower().split() if len(w) >= 2]
 
         # 1. Pinecone vector search (handles typos via embeddings)
         pinecone_filter_desc = []

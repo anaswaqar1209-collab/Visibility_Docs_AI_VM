@@ -11,9 +11,9 @@ class GroqService:
         self.client = Groq(api_key=api_key) if api_key and api_key != "gsk_your_groq_api_key" else None
         self.model = "llama-3.3-70b-versatile"
         self.vision_models = [
-            "llama-3.2-11b-vision-preview",
             "meta-llama/llama-4-scout-17b-16e-instruct",
             "qwen/qwen3.6-27b",
+            "llama-3.2-90b-vision-preview",
         ]
         self._vision_model_idx = 0
         self.available = self.client is not None

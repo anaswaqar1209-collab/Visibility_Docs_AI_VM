@@ -109,24 +109,32 @@ class ChatService:
             agent_tag = f" [{p3a}]" if p3a else ""
             chat_log.source_item(i, s["document_title"], s.get("document_type", "") + agent_tag, s["score"])
 
-        # ── Load agent-specific .md prompt ──
+        # ── Build Q&A system prompt from agent type (NOT extraction prompt) ──
         agent_counts = {}
         for r in search_results:
             p3a = r.get("phase3_agent") or DOCUMENT_TO_PHASE3_AGENT.get(r.get("document_type", ""), "other_agent")
             agent_counts[p3a] = agent_counts.get(p3a, 0) + 1
         dominant_agent = max(agent_counts, key=agent_counts.get) if agent_counts else "other_agent"
-        prompt_path = PHASE3_AGENT_PROMPT_MAP.get(dominant_agent, "phase3/other.md")
-        agent_prompt = _load_prompt(prompt_path)
-        if agent_prompt:
-            prompt_display = prompt_path.replace("\\", "/")
-            chat_log.info(f"Loaded agent prompt: {C.DIM}{prompt_display}{C.RESET} ({len(agent_prompt)} chars)")
-            chat_log.info(f"Agent prompt preview: {C.DIM}{agent_prompt[:180].replace(chr(10), ' ')}...{C.RESET}")
+        agent_label = dominant_agent.replace("_", " ").title()
+
+        qa_prompt = (
+            f"You are the {agent_label} — a document Q&A assistant for Visibility Docs AI.\n\n"
+            "Your job is to answer the user's question based ONLY on the provided document context below.\n\n"
+            "Rules:\n"
+            "1. Answer concisely and directly using the context.\n"
+            "2. If the context contains image/vision descriptions, use them to answer.\n"
+            "3. If the answer is NOT in the context, say \"I cannot find this information in the documents.\"\n"
+            "4. Do NOT make up or hallucinate information.\n"
+            "5. Do NOT output JSON or extract fields — just answer the question.\n"
+            "6. If the context has tables or diagrams, explain what they show.\n"
+        )
+        chat_log.info(f"Built Q&A prompt for agent: {dominant_agent} ({len(qa_prompt)} chars)")
 
         chat_log.llm_call("llama-3.3-70b-versatile", context_len, len(question), len(sources))
         llm_t0 = time.time()
         is_followup = not is_first
         answer = conversation_service.chat(question, context, session_id=sid, is_followup=is_followup,
-                                            system_prompt=agent_prompt)
+                                            system_prompt=qa_prompt)
         chat_log.llm_response(time.time() - llm_t0, len(answer))
 
         history = conversation_service.get_history(sid)
