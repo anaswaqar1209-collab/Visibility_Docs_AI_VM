@@ -10,7 +10,7 @@ from ..models.schemas import DocumentStatus
 from .orchestrator_service import orchestrator
 
 logger = logging.getLogger("visibility-docs")
-_pool = ThreadPoolExecutor(max_workers=4)
+_pool = ThreadPoolExecutor(max_workers=8)
 
 
 class DocumentService:
@@ -38,7 +38,29 @@ class DocumentService:
 
     async def process_document(self, document_id: str, organization_id: str) -> dict:
         SupabaseDB.update("documents", {"status": DocumentStatus.PROCESSING.value}, "id", document_id)
-        fut = _pool.submit(orchestrator.run_pipeline, document_id, organization_id)
+        def _safe_run(did, oid):
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as runner:
+                fut = runner.submit(orchestrator.run_pipeline, did, oid)
+                try:
+                    return fut.result(timeout=1800)
+                except concurrent.futures.TimeoutError:
+                    logger.error(f"Pipeline timed out (>30 min) for {did}")
+                    try:
+                        SupabaseDB.update("documents", {"status": "failed", "error_message": "Pipeline timed out"}, "id", did)
+                    except Exception:
+                        pass
+                    return {"status": "failed"}
+                except Exception as e:
+                    logger.error(f"Pipeline crashed for {did}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    try:
+                        SupabaseDB.update("documents", {"status": "failed", "error_message": str(e)}, "id", did)
+                    except Exception:
+                        pass
+                    return {"status": "failed"}
+        fut = _pool.submit(_safe_run, document_id, organization_id)
         def _log_err(f):
             try:
                 exc = f.exception()

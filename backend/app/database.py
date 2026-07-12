@@ -22,7 +22,9 @@ def _get_supabase():
             and not url.startswith("https://test") and not url.startswith("http://test")):
         try:
             from supabase import create_client
-            _supabase_client = create_client(url, key)
+            from supabase.lib.client_options import SyncClientOptions
+            opts = SyncClientOptions(postgrest_client_timeout=30)
+            _supabase_client = create_client(url, key, options=opts)
             _use_supabase = True
         except Exception:
             _supabase_client = None

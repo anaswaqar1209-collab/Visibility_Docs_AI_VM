@@ -348,7 +348,7 @@ class OrchestratorService:
                 emb_future = pool.submit(rag_service.index_document, document_id, organization_id, raw_text, file_path)
 
                 t0 = time.time()
-                extraction = ext_future.result()
+                extraction = ext_future.result(timeout=120)  # 2 min timeout
                 ext_duration = int((time.time() - t0) * 1000)
                 fields = list(extraction.get("extracted_data", {}).keys())
                 log.ok(f"Extracted {len(fields)} fields: {', '.join(fields[:8])}")
@@ -358,7 +358,7 @@ class OrchestratorService:
                 log.step("EMBEDDING & VECTOR INDEXING")
                 log.agent_call("rag_service", "", "all-MiniLM-L6-v2 → Pinecone + Supabase")
                 try:
-                    emb_future.result()
+                    emb_future.result(timeout=120)  # 2 min timeout
                     log.ok("Document indexed to vector store")
                 except Exception as e:
                     log.warn(f"Embedding failed: {e}")

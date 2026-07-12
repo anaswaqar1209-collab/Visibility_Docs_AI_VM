@@ -5,6 +5,7 @@ import time
 import json
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..config import settings
 from ..database import SupabaseDB
 
@@ -194,62 +195,86 @@ def process_pdf_images(file_path: str, document_id: str, organization_id: str, m
     images = raw_images[:max_images]
     results = []
 
+    # Step 1: Save all images to disk first (sequential, fast)
     for img_data in images:
-        try:
-            img_data = _save_image_file(img_data, document_id)
+        _save_image_file(img_data, document_id)
 
+    # Step 2: Process Vision API calls in parallel (biggest bottleneck)
+    def _process_one(img_data: dict) -> dict | None:
+        try:
             t0 = time.time()
             b64 = _image_to_b64(img_data)
             vision_result = _call_vision(b64)
-            vision_time = time.time() - t0
+            elapsed = time.time() - t0
 
             if not vision_result or not vision_result.get("markdown"):
                 logger.warning(f"[ImageExtraction] Vision failed for {img_data['image_id']}, skipping")
-                continue
-
-            vision_md = vision_result["markdown"]
+                return None
 
             before_text, after_text = _find_surrounding_text(
                 img_data["page_text"], img_data["image_index"], len(images)
             )
 
-            image_md = f"# Figure (Page {img_data['page_num']})\n\n"
-            image_md += f"**Image ID:** {img_data['image_id']}\n\n"
-            image_md += f"**Page:** {img_data['page_num']}\n\n"
-            if before_text:
-                image_md += f"**Preceding Context:**\n{before_text}\n\n"
-            image_md += vision_md.strip() + "\n\n"
-            if after_text:
-                image_md += f"**Following Context:**\n{after_text}\n\n"
-
-            meta = {
-                "document_id": document_id,
-                "organization_id": organization_id,
-                "image_id": img_data["image_id"],
-                "page_number": img_data["page_num"],
-                "image_index": img_data["image_index"],
-                "image_path": img_data.get("image_path", ""),
-                "image_width": img_data.get("width", 0),
-                "image_height": img_data.get("height", 0),
-                "vision_title": vision_result.get("title", ""),
-                "vision_ocr_text": vision_result.get("ocr_text", ""),
-                "vision_components": vision_result.get("components", []),
-                "vision_labels": vision_result.get("labels", []),
-                "vision_warnings": vision_result.get("warnings", []),
-                "vision_description": vision_result.get("description", ""),
+            return {
+                "img_data": img_data,
+                "vision_result": vision_result,
+                "vision_md": vision_result["markdown"],
+                "before_text": before_text,
+                "after_text": after_text,
+                "elapsed": elapsed,
             }
-
-            results.append({
-                "markdown": image_md,
-                "metadata": meta,
-                "vision_time_ms": int(vision_time * 1000),
-            })
-
-            logger.info(f"[ImageExtraction] Processed page {img_data['page_num']} image {img_data['image_index']} in {vision_time:.1f}s")
-
         except Exception as e:
-            logger.error(f"[ImageExtraction] Failed to process image: {e}")
-            continue
+            logger.error(f"[ImageExtraction] Failed to process image {img_data.get('image_id', '?')}: {e}")
+            return None
+
+    max_workers = min(3, len(images))
+    processed = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_process_one, img): img for img in images}
+        for fut in as_completed(futures, timeout=600):
+            result = fut.result()
+            if result:
+                processed.append(result)
+
+    # Step 3: Build markdown + metadata (sequential in main thread)
+    for p in processed:
+        img_data = p["img_data"]
+        vision_result = p["vision_result"]
+        vision_md = p["vision_md"]
+        before_text = p["before_text"]
+        after_text = p["after_text"]
+
+        image_md = f"# Figure (Page {img_data['page_num']})\n\n"
+        image_md += f"**Image ID:** {img_data['image_id']}\n\n"
+        image_md += f"**Page:** {img_data['page_num']}\n\n"
+        if before_text:
+            image_md += f"**Preceding Context:**\n{before_text}\n\n"
+        image_md += vision_md.strip() + "\n\n"
+        if after_text:
+            image_md += f"**Following Context:**\n{after_text}\n\n"
+
+        meta = {
+            "document_id": document_id,
+            "organization_id": organization_id,
+            "image_id": img_data["image_id"],
+            "page_number": img_data["page_num"],
+            "image_index": img_data["image_index"],
+            "image_path": img_data.get("image_path", ""),
+            "image_width": img_data.get("width", 0),
+            "image_height": img_data.get("height", 0),
+            "vision_title": vision_result.get("title", ""),
+            "vision_ocr_text": vision_result.get("ocr_text", ""),
+            "vision_components": vision_result.get("components", []),
+            "vision_labels": vision_result.get("labels", []),
+            "vision_warnings": vision_result.get("warnings", []),
+            "vision_description": vision_result.get("description", ""),
+        }
+
+        results.append({
+            "markdown": image_md,
+            "metadata": meta,
+            "vision_time_ms": int(p["elapsed"] * 1000),
+        })
 
     # Save all descriptions to a text file alongside the images
     if results:

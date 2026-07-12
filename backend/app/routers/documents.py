@@ -62,11 +62,16 @@ async def upload_document(
         existing_data = getattr(existing, "data", existing if isinstance(existing, list) else [])
         if isinstance(existing_data, list) and existing_data:
             dup = existing_data[0] if isinstance(existing_data[0], dict) else {}
-            print(f"[UPLOAD] DUPLICATE DETECTED - already uploaded as '{dup.get('title', 'unknown')}'")
-            raise HTTPException(
-                status_code=409,
-                detail=f"Duplicate file detected. Already uploaded as '{dup.get('title', 'unknown')}' (status: {dup.get('status', '?')})",
-            )
+            old_file = dup.get("original_file_url", "")
+            if old_file and not os.path.exists(old_file):
+                print(f"[UPLOAD] Old file missing on disk - deleting stale record and allowing re-upload")
+                SupabaseDB.delete_document_cascade(dup.get("id", ""))
+            else:
+                print(f"[UPLOAD] DUPLICATE DETECTED - already uploaded as '{dup.get('title', 'unknown')}'")
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Duplicate file detected. Already uploaded as '{dup.get('title', 'unknown')}' (status: {dup.get('status', '?')})",
+                )
 
     try:
         doc = await document_service.create_document(

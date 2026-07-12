@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import time
 import base64
 import logging
 from typing import Optional
@@ -183,18 +184,30 @@ class VisionProvider:
             {"type": "text", "text": VISION_IMAGE_PROMPT},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}},
         ]
-        try:
-            result = groq_service.chat_vision(
-                [{"role": "user", "content": content}],
-                temperature=0.0,
-                max_tokens=2048,
-            )
-            if result and not result.startswith("[Groq"):
-                return result
-            return ""
-        except Exception as e:
-            logger.error(f"Groq vision call failed: {e}")
-            return ""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                result = groq_service.chat_vision(
+                    [{"role": "user", "content": content}],
+                    temperature=0.0,
+                    max_tokens=2048,
+                )
+                if result and not result.startswith("[Groq"):
+                    return result
+                return ""
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "rate_limit" in err_str.lower():
+                    import re
+                    match = re.search(r"try again in (\d+\.?\d*)s", err_str)
+                    wait = float(match.group(1)) + 0.5 if match else float(2 ** attempt)
+                    logger.warning(f"Groq rate limited, retry {attempt+1}/{max_retries} in {wait:.1f}s")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"Groq vision call failed: {e}")
+                return ""
+        logger.warning(f"Groq vision failed after {max_retries} retries (rate limited)")
+        return ""
 
     def _call_openai(self, b64_image: str) -> str:
         if not self.api_key:

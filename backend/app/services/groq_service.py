@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import httpx
 from groq import Groq
 from ..config import settings
 
@@ -8,7 +9,10 @@ from ..config import settings
 class GroqService:
     def __init__(self):
         api_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY", "")
-        self.client = Groq(api_key=api_key) if api_key and api_key != "gsk_your_groq_api_key" else None
+        if api_key and api_key != "gsk_your_groq_api_key":
+            self.client = Groq(api_key=api_key, timeout=httpx.Timeout(120.0))
+        else:
+            self.client = None
         self.model = "llama-3.3-70b-versatile"
         self.vision_models = [
             "meta-llama/llama-4-scout-17b-16e-instruct",

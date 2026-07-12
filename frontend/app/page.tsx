@@ -255,7 +255,7 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
     d.phase3_agent || DOC_TYPE_TO_AGENT[d.document_type] || "other_agent";
 
   const filtered = docs.filter((d: any) => {
-    if (d.status !== "processed" && d.status !== "failed" && d.status !== "error") return false;
+    if (d.status !== "processed" && d.status !== "failed" && d.status !== "error" && d.status !== "processing") return false;
     const matchSearch = (d.title || "").toLowerCase().includes(search.toLowerCase());
     const matchAgent = !agentFilter || getDocAgent(d) === agentFilter;
     return matchSearch && matchAgent;
@@ -307,7 +307,7 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
                   <p className="font-semibold text-sm text-slate-800 truncate">{doc.title || "Untitled"}</p>
                   <div className="flex gap-1.5 mt-1.5 flex-wrap">
                     <span className={`badge badge-sm ${typeColor(doc.document_type)}`}>{doc.document_type || "unknown"}</span>
-                    <span className={`badge badge-sm ${statusColor(doc.status)}`}>{doc.status}</span>
+                    <span className={`badge badge-sm ${statusColor(doc.status)}`}>{doc.status === "processing" ? <><span className="loading loading-spinner loading-xs mr-1" />Processing</> : doc.status}</span>
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1.5">{timeAgo(doc.created_at)}</p>
                 </div>
