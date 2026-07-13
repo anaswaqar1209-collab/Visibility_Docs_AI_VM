@@ -317,20 +317,24 @@ class OrchestratorService:
 
             log.result("Route → Phase 3 Agent", agent_type, C.MAGENTA)
 
-            # ── Step 4: Table Extraction ──
+            # ── Step 4: Table Extraction (PDF only) ──
             log.step("TABLE EXTRACTION")
             log.agent_call("table_service", "", "Camelot / pdfplumber")
-            try:
-                from .table_service import extract_tables, tables_to_text
-                detected_tables = extract_tables(file_path)
-                if detected_tables:
-                    table_text = tables_to_text(detected_tables)
-                    raw_text = table_text + "\n\n" + raw_text
-                    log.ok(f"Found {len(detected_tables)} tables ({len(table_text)} chars) prepended to text")
-                else:
-                    log.ok("No tables detected")
-            except Exception as e:
-                log.info(f"Table extraction skipped: {e}")
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext == ".pdf":
+                try:
+                    from .table_service import extract_tables, tables_to_text
+                    detected_tables = extract_tables(file_path)
+                    if detected_tables:
+                        table_text = tables_to_text(detected_tables)
+                        raw_text = table_text + "\n\n" + raw_text
+                        log.ok(f"Found {len(detected_tables)} tables ({len(table_text)} chars) prepended to text")
+                    else:
+                        log.ok("No tables detected")
+                except Exception as e:
+                    log.info(f"Table extraction skipped: {e}")
+            else:
+                log.ok("Skipped (not a PDF)")
 
             # ── Stage 5 & 6: Entity Extraction + Embedding (parallel) ──
             self.update_stage(document_id, organization_id, "extracting", 70, "running")
@@ -390,7 +394,6 @@ class OrchestratorService:
             # ── Stage 7: Image Extraction & Indexing (separate from text pipeline) ──
             log.step("IMAGE EXTRACTION")
             log.agent_call("image_extraction_service", "", "Groq Vision")
-            ext = os.path.splitext(file_path)[1].lower()
             image_results = []
             if ext == ".pdf":
                 try:

@@ -242,7 +242,7 @@ class ClassificationAgent:
             t0 = __import__("time").time()
             log.info("Calling Groq API (llama-8b)...")
             result = groq_service._parse_json(
-                groq_service.chat([{"role": "user", "content": prompt}], temperature=0.05, max_tokens=2048),
+                groq_service.chat([{"role": "user", "content": prompt}], temperature=0.05, max_tokens=2048, model="llama-3.1-8b-instant"),
                 {},
             )
             duration = __import__("time").time() - t0

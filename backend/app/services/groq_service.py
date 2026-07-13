@@ -23,11 +23,11 @@ class GroqService:
         self.available = self.client is not None
         self.vision_available = True
 
-    def chat(self, messages: list[dict], temperature: float = 0.1, max_tokens: int = 4096) -> str:
+    def chat(self, messages: list[dict], temperature: float = 0.1, max_tokens: int = 4096, model: str = None) -> str:
         if not self.available:
             return self._fallback_response(messages)
         response = self.client.chat.completions.create(
-            model=self.model,
+            model=model or self.model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
