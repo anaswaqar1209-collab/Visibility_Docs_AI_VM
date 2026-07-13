@@ -44,6 +44,7 @@ class DocumentResponse(BaseModel):
     file_size: Optional[int] = None
     raw_text: Optional[str] = None
     error_message: Optional[str] = None
+    cv_score: Optional[float] = None
     created_at: str
     updated_at: str
 

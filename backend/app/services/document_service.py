@@ -76,11 +76,38 @@ class DocumentService:
         result = await loop.run_in_executor(_pool, orchestrator.run_pipeline, document_id, organization_id)
         return result
 
+    def _attach_cv_extraction(self, doc: dict, organization_id: str, full_data: bool = False):
+        if doc.get("document_type") != "resume":
+            return
+        try:
+            ext_result = SupabaseDB.select("document_extractions",
+                columns="extracted_data",
+                filters={"document_id": doc["id"], "organization_id": organization_id},
+            )
+            ext_data = getattr(ext_result, "data", ext_result if isinstance(ext_result, list) else [])
+            if isinstance(ext_data, list) and ext_data:
+                raw = ext_data[0].get("extracted_data", "{}")
+                if isinstance(raw, str):
+                    import json
+                    parsed = json.loads(raw)
+                else:
+                    parsed = raw or {}
+                ev = parsed.get("cv_evaluation") or {}
+                score = ev.get("overall_score")
+                if score is not None:
+                    doc["cv_score"] = float(score)
+                if full_data and ev:
+                    doc["cv_extraction_data"] = ev
+        except Exception:
+            pass
+
     def get_document(self, document_id: str, organization_id: str) -> dict:
         result = SupabaseDB.select("documents", filters={"id": document_id, "organization_id": organization_id})
         data = getattr(result, "data", result if isinstance(result, list) else [])
         if isinstance(data, list) and len(data) > 0:
-            return data[0]
+            doc = data[0]
+            self._attach_cv_extraction(doc, organization_id, full_data=True)
+            return doc
         return data if isinstance(data, dict) else None
 
     def list_documents(self, organization_id: str, limit: int = 50, offset: int = 0, search: str = "", phase3_agent: str = "") -> list[dict]:
@@ -90,7 +117,13 @@ class DocumentService:
         like = {"title": search} if search else None
         result = SupabaseDB.select("documents", filters=filters, like=like, limit=limit, offset=offset)
         data = getattr(result, "data", result if isinstance(result, list) else [])
-        return data if isinstance(data, list) else []
+        docs = data if isinstance(data, list) else []
+
+        # Attach cv_score for resume documents
+        for d in docs:
+            self._attach_cv_extraction(d, organization_id)
+
+        return docs
 
     def delete_document(self, document_id: str, organization_id: str):
         doc = self.get_document(document_id, organization_id)

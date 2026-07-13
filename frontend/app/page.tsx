@@ -275,6 +275,13 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
     const matchSearch = (d.title || "").toLowerCase().includes(search.toLowerCase());
     const matchAgent = !agentFilter || getDocAgent(d) === agentFilter;
     return matchSearch && matchAgent;
+  }).sort((a: any, b: any) => {
+    const aIsResume = a.document_type === "resume";
+    const bIsResume = b.document_type === "resume";
+    if (aIsResume && bIsResume) return (b.cv_score || 0) - (a.cv_score || 0);
+    if (aIsResume) return -1;
+    if (bIsResume) return 1;
+    return 0;
   });
 
   return (
@@ -324,6 +331,11 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
                   <div className="flex gap-1.5 mt-1.5 flex-wrap">
                     <span className={`badge badge-sm ${typeColor(doc.document_type)}`}>{doc.document_type || "unknown"}</span>
                     <span className={`badge badge-sm ${statusColor(doc.status)}`}>{doc.status === "processing" ? <><span className="loading loading-spinner loading-xs mr-1" />Processing</> : doc.status}</span>
+                    {doc.document_type === "resume" && doc.cv_score != null && (
+                      <span className={`badge badge-sm ${doc.cv_score >= 70 ? "badge-success" : doc.cv_score >= 40 ? "badge-warning" : "badge-error"}`}>
+                        Score: {doc.cv_score}
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1.5">{timeAgo(doc.created_at)}</p>
                 </div>
@@ -554,12 +566,17 @@ function DocDetail({ doc, showToast, onDelete }: any) {
   const [similar, setSimilar] = useState<any[]>([]);
   const [images, setImages] = useState<any[]>([]);
   const [descFileUrl, setDescFileUrl] = useState("");
+  const [cvData, setCvData] = useState<any>(null);
 
   useEffect(() => {
     authFetch(token, `${API}/api/v1/search/similar/${doc.id}?organization_id=${orgId}`)
       .then(r => r.json()).then(d => setSimilar(d?.results || d || [])).catch(() => {});
     authFetch(token, `${API}/api/v1/documents/${doc.id}/images?organization_id=${orgId}`)
       .then(r => r.json()).then(d => { setImages(d?.images || []); setDescFileUrl(d?.descriptions_file || ""); }).catch(() => {});
+    if (doc.document_type === "resume") {
+      authFetch(token, `${API}/api/v1/documents/${doc.id}?organization_id=${orgId}`)
+        .then(r => r.json()).then(d => setCvData(d?.cv_extraction_data || null)).catch(() => {});
+    }
   }, [doc.id]);
 
   const del = async () => {
@@ -642,6 +659,77 @@ function DocDetail({ doc, showToast, onDelete }: any) {
                 )}
               </div>
             ))}
+          </div>
+        </details>
+      )}
+
+      {doc.document_type === "resume" && cvData && (
+        <details className="bg-white rounded-xl border border-slate-200 mb-6 overflow-hidden" open>
+          <summary className="px-4 py-3 text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-50 transition-colors flex items-center gap-2">
+            <svg className="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+            </svg>
+            CV Evaluation
+            {doc.cv_score != null && (
+              <span className={`ml-auto badge ${doc.cv_score >= 70 ? "badge-success" : doc.cv_score >= 40 ? "badge-warning" : "badge-error"}`}>
+                Score: {doc.cv_score}/100
+              </span>
+            )}
+          </summary>
+          <div className="p-4 space-y-3">
+            {["skills_score", "experience_score", "education_score", "completeness_score"].map((key) => {
+              const val = cvData[key];
+              if (val == null) return null;
+              const pct = Math.min(100, Math.max(0, Number(val)));
+              return (
+                <div key={key}>
+                  <div className="flex justify-between text-xs text-slate-500 mb-1">
+                    <span className="capitalize">{key.replace(/_score$/, "")} Score</span>
+                    <span>{pct}/100</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full transition-all duration-500 ${pct >= 70 ? "bg-emerald-500" : pct >= 40 ? "bg-amber-500" : "bg-red-500"}`}
+                      style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+
+            {cvData.strengths?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-slate-600 mb-1">Strengths</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {cvData.strengths.map((s: string, i: number) => (
+                    <span key={i} className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs border border-emerald-200">{s}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {cvData.areas_for_improvement?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-slate-600 mb-1">Areas for Improvement</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {cvData.areas_for_improvement.map((a: string, i: number) => (
+                    <span key={i} className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 text-xs border border-amber-200">{a}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {cvData.recommendation && (
+              <div>
+                <p className="text-xs font-semibold text-slate-600 mb-1">Recommendation</p>
+                <p className="text-sm text-slate-700 bg-slate-50 rounded-lg p-3 border border-slate-200">{cvData.recommendation}</p>
+              </div>
+            )}
+
+            {cvData.evaluation_summary && (
+              <div>
+                <p className="text-xs font-semibold text-slate-600 mb-1">Evaluation Summary</p>
+                <p className="text-sm text-slate-700 bg-slate-50 rounded-lg p-3 border border-slate-200">{cvData.evaluation_summary}</p>
+              </div>
+            )}
           </div>
         </details>
       )}

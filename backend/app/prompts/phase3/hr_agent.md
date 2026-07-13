@@ -48,6 +48,46 @@ Extract structured HR data from offer letters, employee records, appraisal forms
 | key_terms | string | Free text | "At-will employment, 20 PTO days" | if present | Important terms or conditions |
 | notes | string | Free text | "Exceptional performance rating" | if present | Any additional notes or comments |
 
+## CV/Resume-Specific Fields
+
+If the document is a **Resume/CV**, ALSO extract these fields:
+
+| Field | Type | Expected Format | Example | Notes |
+|-------|------|----------------|---------|-------|
+| skills | array of strings | List of skills | ["Python", "React", "AWS", "Project Management"] | Technical and soft skills mentioned |
+| work_experience | array of objects | `[{"company": "str", "role": "str", "duration": "str", "highlights": ["str"]}]` | [{"company": "Google", "role": "SWE", "duration": "2020-2023", "highlights": ["Led team"]}] | Work history entries |
+| education | array of objects | `[{"degree": "str", "institution": "str", "year": "str"}]` | [{"degree": "BSCS", "institution": "MIT", "year": "2018"}] | Educational background |
+| certifications | array of strings | List of certs | ["AWS Certified", "PMP"] | Professional certifications |
+| total_experience_years | number | Decimal | 8.5 | Total years of professional experience |
+| languages | array of strings | List of languages | ["English", "Urdu"] | Languages mentioned |
+
+If the document is a **Resume/CV**, ALSO include a "cv_evaluation" object:
+
+```json
+"cv_evaluation": {
+  "overall_score": 85,
+  "skills_score": 80,
+  "experience_score": 90,
+  "education_score": 75,
+  "completeness_score": 70,
+  "strengths": ["10+ years experience", "Multiple technologies", "Leadership"],
+  "areas_for_improvement": ["No certifications listed", "Missing project details"],
+  "recommendation": "Strong candidate for senior role",
+  "evaluation_summary": "Experienced professional with solid technical background and leadership skills"
+}
+```
+
+Scoring guidelines (0-100):
+- **overall_score**: General impression — how strong is this candidate overall
+- **skills_score**: Relevance and depth of technical/soft skills
+- **experience_score**: Quality and relevance of work experience
+- **education_score**: Quality of educational background
+- **completeness_score**: How complete is the CV (missing sections reduce score)
+- **strengths**: Top 2-4 positive aspects
+- **areas_for_improvement**: Top 1-3 gaps or missing info
+- **recommendation**: Brief hiring recommendation (1 sentence)
+- **evaluation_summary**: One-sentence summary of the candidate
+
 ## Few-Shot Example
 
 **Input:**
