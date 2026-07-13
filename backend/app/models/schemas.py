@@ -81,7 +81,11 @@ class SearchRequest(BaseModel):
     query: str
     organization_id: str
     document_type: Optional[str] = None
-    limit: int = 10
+    phase3_agent: Optional[str] = None
+    status: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    limit: int = 20
     offset: int = 0
 
 
@@ -130,6 +134,11 @@ class ChatRequest(BaseModel):
     organization_id: str
     question: str
     document_ids: Optional[list[str]] = None
+    document_type: Optional[str] = None
+    phase3_agent: Optional[str] = None
+    status: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
     chat_history: Optional[list[dict]] = None
     session_id: Optional[str] = None
 

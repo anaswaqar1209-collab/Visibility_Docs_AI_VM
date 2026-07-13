@@ -35,6 +35,8 @@ class ChatService:
             self._auto_title(session_id, question)
 
     def chat_with_document(self, question: str, document_ids: list, organization_id: str,
+                           document_type: str = None, phase3_agent: str = None,
+                           status: str = None, date_from: str = None, date_to: str = None,
                            chat_history: list[dict] = None, session_id: str = None) -> dict:
         chat_log = get_chat_logger()
         chat_log.chat_start(question, session_id=session_id or "", doc_count=len(document_ids or []))
@@ -42,10 +44,18 @@ class ChatService:
 
         sid, resolved_ids, is_first = self._get_or_create_session(session_id, organization_id, document_ids)
 
-        if resolved_ids:
-            search_results = rag_service.hybrid_search(question, organization_id, document_ids=resolved_ids, limit=15)
-        else:
-            search_results = rag_service.hybrid_search(question, organization_id, limit=15)
+        hybrid_kwargs = dict(
+            query=question,
+            organization_id=organization_id,
+            document_type=document_type,
+            phase3_agent=phase3_agent,
+            status=status,
+            date_from=date_from,
+            date_to=date_to,
+            document_ids=resolved_ids if resolved_ids else None,
+            limit=15,
+        )
+        search_results = rag_service.hybrid_search(**hybrid_kwargs)
 
         if not search_results:
             chat_log.search_strategy("Context Building", "no results found")

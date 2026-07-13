@@ -72,11 +72,12 @@ const AGENT_OPTIONS = [
 export default function Home() {
   const router = useRouter();
   const { orgId, token, loading, user, logout } = useAuth();
-  const [tab, setTab] = useState<"chat" | "docs">("chat");
+  const [tab, setTab] = useState<"chat" | "docs" | "search">("chat");
   const [toast, setToast] = useState("");
   const [selectedChatDocs, setSelectedChatDocs] = useState<any[]>([]);
   const [agentFilter, setAgentFilter] = useState("");
   const [sendingReport, setSendingReport] = useState(false);
+  const [gotoDoc, setGotoDoc] = useState<any | null>(null);
 
   const showToast = useCallback((m: string) => { setToast(m); setTimeout(() => setToast(""), 3000); }, []);
 
@@ -133,6 +134,11 @@ export default function Home() {
                   ${tab === "docs" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
                 📄 Documents
               </button>
+              <button onClick={() => setTab("search")}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
+                  ${tab === "search" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                🔍 Search
+              </button>
             </div>
             <button onClick={sendReport} disabled={sendingReport}
               className="px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all disabled:opacity-50">
@@ -153,9 +159,12 @@ export default function Home() {
       </header>
 
       <div className="flex-1 flex overflow-hidden">
-        {tab === "docs" ? (
+        {tab === "search" ? (
+          <SearchSection showToast={showToast} orgId={orgId} token={token}
+            onOpenDoc={(doc: any) => { setGotoDoc(doc); setTab("docs"); }} />
+        ) : tab === "docs" ? (
           <AllDocumentsPage showToast={showToast} orgId={orgId} token={token}
-            agentFilter={agentFilter} setAgentFilter={setAgentFilter} />
+            agentFilter={agentFilter} setAgentFilter={setAgentFilter} gotoDoc={gotoDoc} clearGotoDoc={() => setGotoDoc(null)} />
         ) : (
           <ChatSection showToast={showToast} selectedDocs={selectedChatDocs} setSelectedDocs={setSelectedChatDocs}
             orgId={orgId} token={token} agentFilter={agentFilter} />
@@ -178,7 +187,7 @@ export default function Home() {
 function loadSeen(): Set<string> { try { const r = localStorage.getItem("sc"); return new Set(r ? JSON.parse(r) : []); } catch { return new Set(); } }
 function saveSeen(id: string) { try { const r = localStorage.getItem("sc"); const a: string[] = r ? JSON.parse(r) : []; if (!a.includes(id)) { a.push(id); localStorage.setItem("sc", JSON.stringify(a)); } } catch {} }
 
-function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter }: any) {
+function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter, gotoDoc, clearGotoDoc }: any) {
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
@@ -189,6 +198,13 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
   const prevDocsRef = useRef<any[]>([]);
 
   useEffect(() => { load(); const i = setInterval(load, 5000); return () => clearInterval(i); }, []);
+
+  useEffect(() => {
+    if (gotoDoc) {
+      setSelected(gotoDoc);
+      clearGotoDoc();
+    }
+  }, [gotoDoc]);
 
   async function load() {
     try {
@@ -654,21 +670,54 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [docQuery, setDocQuery] = useState("");
-  const [docs, setDocs] = useState<any[]>([]);
   const [sources, setSources] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [showSessions, setShowSessions] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  /* ── left panel state ── */
+  const [searchQuery, setSearchQuery] = useState("");
+  const [panelFilter, setPanelFilter] = useState<"all" | "docs" | "chat">("all");
+  const [allDocs, setAllDocs] = useState<any[]>([]);
+  const [docsLoading, setDocsLoading] = useState(true);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading]);
 
   useEffect(() => {
+    loadDocs();
+    const i = setInterval(loadDocs, 7000);
+    return () => clearInterval(i);
+  }, []);
+
+  async function loadDocs() {
+    try {
+      const r = await authFetch(token, `${API}/api/v1/documents?q=&limit=200&organization_id=${orgId}`);
+      const d = await r.json();
+      setAllDocs(d?.documents || d || []);
+    } catch {} finally { setDocsLoading(false); }
+  }
+
+  const getDocAgent = (d: any) =>
+    d.phase3_agent || DOC_TYPE_TO_AGENT[d.document_type] || "other_agent";
+
+  const filteredDocs = allDocs.filter((d: any) => {
+    if (d.status !== "processed" && d.status !== "failed" && d.status !== "error" && d.status !== "processing") return false;
+    const matchSearch = !searchQuery || (d.title || "").toLowerCase().includes(searchQuery.toLowerCase());
+    const matchAgent = !agentFilter || getDocAgent(d) === agentFilter;
+    return matchSearch && matchAgent;
+  });
+
+  const filteredSessions = sessions.filter((s: any) =>
+    !searchQuery || (s.title || "").toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const sessionsRefresh = useCallback(() => {
     authFetch(token, `${API}/api/v1/chat/sessions?organization_id=${orgId}`)
       .then(r => r.json()).then(d => setSessions(d?.sessions || d || [])).catch(() => {});
   }, []);
+
+  useEffect(() => { sessionsRefresh(); }, []);
 
   const loadSession = useCallback(async (sid: string) => {
     try {
@@ -677,13 +726,12 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
       const msgs = d?.messages || [];
       setMessages(msgs.map((m: any) => ({ role: m.role, content: m.content })));
       setActiveSessionId(sid);
-      setShowSessions(false);
       const storedIds: string[] = d?.document_ids || [];
       if (storedIds.length > 0) {
         const dr = await authFetch(token, `${API}/api/v1/documents?q=&limit=200&organization_id=${orgId}`);
         const dd = await dr.json();
-        const allDocs: any[] = dd?.documents || dd || [];
-        setSelectedDocs(allDocs.filter((x: any) => storedIds.includes(x.id)));
+        const allDocsList: any[] = dd?.documents || dd || [];
+        setSelectedDocs(allDocsList.filter((x: any) => storedIds.includes(x.id)));
       } else {
         setSelectedDocs([]);
       }
@@ -703,24 +751,10 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
     if (activeSessionId === sid) newSession();
   };
 
-  const searchDocs = async (q: string) => {
-    setDocQuery(q);
-    if (!q.trim()) { setDocs([]); return; }
-    try {
-      let url = `${API}/api/v1/documents?q=${encodeURIComponent(q)}&limit=10&organization_id=${orgId}`;
-      if (agentFilter) url += `&phase3_agent=${encodeURIComponent(agentFilter)}`;
-      const r = await authFetch(token, url);
-      const d = await r.json();
-      setDocs(d?.documents || d || []);
-    } catch { }
-  };
-
-  const toggleDoc = (doc: any) => {
+  const toggleDoc = (id: string) => {
     setSelectedDocs((prev: any[]) =>
-      prev.find((d: any) => d.id === doc.id) ? prev.filter((d: any) => d.id !== doc.id) : [...prev, doc]
+      prev.find((d: any) => d.id === id) ? prev.filter((d: any) => d.id !== id) : [...prev, allDocs.find((d: any) => d.id === id)]
     );
-    setDocQuery("");
-    setDocs([]);
   };
 
   const send = async () => {
@@ -733,7 +767,7 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
 
     try {
       const docIds = selectedDocs.map((d: any) => d.id);
-      const body: any = { question: q, organization_id: orgId, document_ids: docIds };
+      const body: any = { question: q, organization_id: orgId, document_ids: docIds, phase3_agent: agentFilter || undefined };
       if (activeSessionId) body.session_id = activeSessionId;
 
       const r = await authFetch(token, `${API}/api/v1/chat`, {
@@ -746,100 +780,162 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
       if (data.session_id) setActiveSessionId(data.session_id);
       if (data.sources) setSources(data.sources);
 
-      authFetch(token, `${API}/api/v1/chat/sessions?organization_id=${orgId}`)
-        .then(r => r.json()).then(d => setSessions(d?.sessions || d || [])).catch(() => {});
-
+      sessionsRefresh();
     } catch { setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Connection error. Please check the backend." }]); }
     finally { setLoading(false); }
   };
 
+  const SWITCH_OPTIONS = [
+    { value: "all" as const, label: "All" },
+    { value: "docs" as const, label: "Documents" },
+    { value: "chat" as const, label: "Chat" },
+  ];
+
+  const showSessionsList = panelFilter === "all" || panelFilter === "chat";
+  const showDocsList = panelFilter === "all" || panelFilter === "docs";
+
   return (
-    <div className="flex-1 flex overflow-hidden">
-      {/* sessions sidebar */}
-      {showSessions && (
-        <div className="w-72 shrink-0 border-r border-slate-200/50 bg-white flex flex-col">
-          <div className="p-4 border-b border-slate-100">
-            <button onClick={newSession}
-              className="btn btn-primary btn-sm w-full bg-gradient-to-r from-indigo-500 to-purple-500 text-white border-0 shadow-md">
-              + New Chat
-            </button>
+    <div className="flex-1 flex overflow-hidden bg-white">
+      {/* ── left panel: docs + sessions ── */}
+      <div className="w-[380px] shrink-0 flex flex-col border-r border-slate-200/50 bg-white">
+        {/* search */}
+        <div className="p-3 pb-1.5">
+          <div className="flex items-center gap-1.5">
+            <div className="relative flex-1">
+              <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all"
+                placeholder="Search documents & chat..." />
+            </div>
           </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-1">
-            {sessions.map((s: any) => (
-              <div key={s.id}
-                className={`group flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer transition-all
-                  ${activeSessionId === s.id ? "bg-indigo-50 text-indigo-700" : "hover:bg-slate-50 text-slate-600"}`}
-                onClick={() => loadSession(s.id)}>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{s.title || "New Chat"}</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">{timeAgo(s.updated_at || s.created_at)}</p>
-                </div>
-                <button onClick={e => { e.stopPropagation(); deleteSession(s.id); }}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 rounded-lg transition-all">
-                  <svg className="w-3.5 h-3.5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-              </div>
+          {/* segmented control */}
+          <div className="flex gap-1 mt-2 p-0.5 bg-slate-100/80 rounded-lg">
+            {SWITCH_OPTIONS.map(o => (
+              <button key={o.value} onClick={() => setPanelFilter(o.value)}
+                className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-all
+                  ${panelFilter === o.value ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                {o.label}
+              </button>
             ))}
           </div>
         </div>
-      )}
 
-      {/* main chat area */}
-      <div className="flex-1 flex flex-col bg-white">
-        {/* top bar */}
-        <div className="shrink-0 flex items-center gap-3 px-5 py-3 border-b border-slate-100">
-          <button onClick={() => setShowSessions(!showSessions)}
-            className="btn btn-ghost btn-sm btn-square text-slate-400 hover:text-slate-600">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-
-          <div className="relative flex-1 max-w-md">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input value={docQuery} onChange={e => searchDocs(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all"
-              placeholder="Search & attach documents..." />
-            {docs.length > 0 && (
-              <div className="absolute top-full mt-1 left-0 right-0 bg-white rounded-xl border border-slate-200 shadow-xl z-10 overflow-hidden">
-                {docs.map((doc: any) => (
-                  <button key={doc.id} onClick={() => toggleDoc(doc)}
-                    className="flex items-center justify-between w-full px-4 py-3 text-sm hover:bg-slate-50 transition-colors">
-                    <span className="truncate text-slate-700">{doc.title || "Untitled"}</span>
-                    <span className={`badge badge-sm ${typeColor(doc.document_type)}`}>{doc.document_type}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {activeSessionId && (
-            <button onClick={newSession} className="btn btn-ghost btn-sm text-slate-400 hover:text-indigo-500">
-              + New
-            </button>
+        {/* list */}
+        <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+          {/* docs section */}
+          {showDocsList && (
+            <>
+              {panelFilter === "all" && filteredDocs.length > 0 && (
+                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-1 pt-1 pb-0.5">Documents</p>
+              )}
+              {docsLoading && [...Array(2)].map((_, i) => (
+                <div key={`s-${i}`} className="h-14 rounded-xl bg-slate-100 animate-pulse" />
+              ))}
+              {filteredDocs.slice(0, panelFilter === "docs" ? 200 : 10).map((doc: any) => {
+                const isSel = selectedDocs.find((d: any) => d.id === doc.id);
+                return (
+                  <div key={doc.id}
+                    className={`flex items-center gap-2 p-2.5 rounded-xl border transition-all cursor-pointer
+                      ${isSel ? "border-indigo-300 bg-indigo-50/50" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                    onClick={() => toggleDoc(doc.id)}>
+                    <input type="checkbox" checked={!!isSel}
+                      onChange={() => toggleDoc(doc.id)}
+                      className="checkbox checkbox-xs rounded border-slate-300 [--chkbg:#6366f1] shrink-0"
+                      onClick={e => e.stopPropagation()} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-slate-800 truncate">{doc.title || "Untitled"}</p>
+                      <div className="flex gap-1 mt-0.5">
+                        <span className={`badge badge-xs ${typeColor(doc.document_type)}`}>{doc.document_type || "unknown"}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
           )}
+
+          {/* sessions section */}
+          {showSessionsList && (
+            <>
+              {panelFilter === "all" && filteredSessions.length > 0 && filteredDocs.length > 0 && (
+                <div className="border-t border-slate-100 pt-2 mt-1" />
+              )}
+              {panelFilter === "all" && filteredSessions.length > 0 && (
+                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-1 pt-1 pb-0.5">Chat History</p>
+              )}
+              {filteredSessions.map((s: any) => (
+                <div key={s.id}
+                  className={`group flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition-all
+                    ${activeSessionId === s.id ? "border-indigo-200 bg-indigo-50/50" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                  onClick={() => loadSession(s.id)}>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-slate-700 truncate">{s.title || "New Chat"}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">{timeAgo(s.updated_at || s.created_at)}</p>
+                  </div>
+                  <button onClick={e => { e.stopPropagation(); deleteSession(s.id); }}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 rounded-lg transition-all shrink-0">
+                    <svg className="w-3 h-3 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+              {panelFilter === "chat" && filteredSessions.length === 0 && !docsLoading && (
+                <div className="text-center py-8 text-slate-400">
+                  <p className="text-2xl mb-1">💬</p>
+                  <p className="text-xs font-medium">No chat sessions</p>
+                </div>
+              )}
+            </>
+          )}
+
+          {panelFilter === "docs" && filteredDocs.length === 0 && !docsLoading && (
+            <div className="text-center py-8 text-slate-400">
+              <p className="text-2xl mb-1">📄</p>
+              <p className="text-xs font-medium">No documents</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── right panel: chat ── */}
+      <div className="flex-1 flex flex-col bg-white">
+        {/* header */}
+        <div className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg gradient-primary flex items-center justify-center shadow-md">
+              <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+            </div>
+            <span className="text-sm font-semibold text-slate-700">Chat</span>
+          </div>
+          <button onClick={newSession}
+            className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white text-xs font-semibold hover:shadow-md transition-all active:scale-95">
+            + New Chat
+          </button>
         </div>
 
         {/* selected docs chips */}
         {selectedDocs.length > 0 && (
-          <div className="shrink-0 flex items-center gap-2 px-5 py-2 bg-indigo-50/40 border-b border-indigo-100/50">
-            <span className="text-[11px] font-semibold text-indigo-500 uppercase tracking-wider">Context:</span>
+          <div className="shrink-0 flex items-center gap-2 px-5 py-2 bg-indigo-50/40 border-b border-indigo-100/50 overflow-x-auto">
+            <span className="text-[11px] font-semibold text-indigo-500 uppercase tracking-wider shrink-0">Context:</span>
             {selectedDocs.map((d: any) => (
               <span key={d.id}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-indigo-200 text-xs font-medium text-indigo-700 shadow-sm">
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-indigo-200 text-xs font-medium text-indigo-700 shadow-sm whitespace-nowrap shrink-0">
                 {d.title || d.id.slice(0, 8)}
-                <button onClick={() => toggleDoc(d)} className="hover:text-red-500 transition-colors">
+                <button onClick={() => {
+                  setSelectedDocs((prev: any[]) => prev.filter((x: any) => x.id !== d.id));
+                }} className="hover:text-red-500 transition-colors">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </span>
             ))}
-            <button onClick={() => setSelectedDocs([])} className="text-[11px] text-slate-400 hover:text-red-400 ml-auto transition-colors">
+            <button onClick={() => setSelectedDocs([])} className="text-[11px] text-slate-400 hover:text-red-400 shrink-0 transition-colors">
               Clear
             </button>
           </div>
@@ -857,7 +953,7 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
                 </div>
                 <h3 className="text-xl font-bold text-slate-700 mb-2">How can I help you?</h3>
                 <p className="text-sm text-slate-400 leading-relaxed">
-                  Ask questions about your documents. Select documents from the search bar above to narrow the context.
+                  Select documents from the left panel and ask questions about them.
                 </p>
               </div>
             </div>
@@ -937,6 +1033,406 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
             <button onClick={send} disabled={loading || !question.trim()}
               className="mr-1.5 p-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all hover:shadow-lg hover:shadow-indigo-500/30 active:scale-95">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════
+   SEARCH SECTION
+   ════════════════════════════════════════ */
+const DOC_TYPE_OPTIONS = [
+  { value: "", label: "All Types" },
+  { value: "invoice", label: "Invoice" },
+  { value: "purchase_order", label: "Purchase Order" },
+  { value: "contract", label: "Contract" },
+  { value: "quotation", label: "Quotation" },
+  { value: "hr_document", label: "HR Document" },
+  { value: "audit_report", label: "Audit Report" },
+  { value: "quality_report", label: "Quality Report" },
+  { value: "certificate", label: "Certificate" },
+  { value: "maintenance_report", label: "Maintenance Report" },
+  { value: "financial_statement", label: "Financial Statement" },
+  { value: "engineering_drawing", label: "Engineering Drawing" },
+  { value: "sop", label: "SOP" },
+  { value: "resume", label: "Resume" },
+  { value: "transcript", label: "Transcript" },
+  { value: "other", label: "Other" },
+];
+
+const STATUS_OPTIONS = [
+  { value: "", label: "All Statuses" },
+  { value: "processed", label: "Processed" },
+  { value: "failed", label: "Failed" },
+  { value: "processing", label: "Processing" },
+  { value: "uploaded", label: "Uploaded" },
+  { value: "classified", label: "Classified" },
+  { value: "extracted", label: "Extracted" },
+];
+
+function SearchSection({ showToast, orgId, token, onOpenDoc }: any) {
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [searched, setSearched] = useState(false);
+  const [docType, setDocType] = useState("");
+  const [agent, setAgent] = useState("");
+  const [status, setStatus] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  /* ── chat state ── */
+  const [messages, setMessages] = useState<any[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [sources, setSources] = useState<any[]>([]);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const [selectedChatDocIds, setSelectedChatDocIds] = useState<string[]>([]);
+
+  useEffect(() => { chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, chatLoading]);
+
+  /* ── upload polling ── */
+  const [allDocs, setAllDocs] = useState<any[]>([]);
+  const [docsLoading, setDocsLoading] = useState(true);
+  useEffect(() => {
+    loadDocs();
+    const i = setInterval(loadDocs, 5000);
+    return () => clearInterval(i);
+  }, []);
+
+  async function loadDocs() {
+    try {
+      const r = await authFetch(token, `${API}/api/v1/documents?q=&limit=200&organization_id=${orgId}`);
+      const d = await r.json();
+      setAllDocs(d?.documents || d || []);
+    } catch {} finally { setDocsLoading(false); }
+  }
+
+  const docs = allDocs.filter((d: any) => {
+    if (d.status !== "processed" && d.status !== "failed" && d.status !== "error" && d.status !== "processing") return false;
+    return true;
+  });
+
+  /* ── search ── */
+  const doSearch = async (newOffset = 0) => {
+    const q = query.trim();
+    if (!q) return;
+    setLoading(true);
+    setSearched(true);
+    try {
+      const params = new URLSearchParams({
+        query: q,
+        organization_id: orgId,
+        limit: "20",
+        offset: String(newOffset),
+      });
+      if (docType) params.set("document_type", docType);
+      if (agent) params.set("phase3_agent", agent);
+      if (status) params.set("status", status);
+      if (dateFrom) params.set("date_from", dateFrom);
+      if (dateTo) params.set("date_to", dateTo);
+
+      const r = await authFetch(token, `${API}/api/v1/search?${params.toString()}`);
+      const d = await r.json();
+      const items: any[] = d?.results || d || [];
+      if (newOffset === 0) {
+        setResults(items);
+      } else {
+        setResults(prev => [...prev, ...items]);
+      }
+      setTotal(d?.total || items.length);
+      setOffset(newOffset);
+    } catch {
+      showToast("Search failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSearch = () => {
+    setResults([]);
+    setOffset(0);
+    doSearch(0);
+  };
+
+  const loadMore = () => {
+    doSearch(offset + 20);
+  };
+
+  /* ── chat send ── */
+  const sendChat = async () => {
+    const q = chatInput.trim();
+    if (!q || chatLoading) return;
+    setChatInput("");
+    setMessages(prev => [...prev, { role: "user", content: q }]);
+    setChatLoading(true);
+    setSources([]);
+    try {
+      const body: any = {
+        question: q,
+        organization_id: orgId,
+        document_ids: selectedChatDocIds.length > 0 ? selectedChatDocIds : [],
+        document_type: docType || undefined,
+        phase3_agent: agent || undefined,
+        status: status || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+      };
+      Object.keys(body).forEach(k => body[k] === undefined && delete body[k]);
+      const r = await authFetch(token, `${API}/api/v1/chat${selectedChatDocIds.length > 0 ? "" : "/all"}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      setMessages(prev => [...prev, { role: "assistant", content: data.answer }]);
+      if (data.sources) setSources(data.sources);
+    } catch {
+      setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Connection error" }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const toggleDocForChat = (id: string) => {
+    setSelectedChatDocIds(prev => prev.includes(id) ? prev.filter(d => d !== id) : [...prev, id]);
+  };
+
+  const displayedItems = searched ? results : docs;
+
+  return (
+    <div className="flex-1 flex overflow-hidden bg-white">
+      {/* ── left panel: docs / search results ── */}
+      <div className="w-[420px] shrink-0 flex flex-col border-r border-slate-200/50 bg-white">
+        {/* search bar */}
+        <div className="p-3 pb-1.5">
+          <div className="flex items-center gap-1.5">
+            <div className="relative flex-1">
+              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input value={query} onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleSearch()}
+                className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all"
+                placeholder="Search documents..." />
+            </div>
+            <button onClick={handleSearch} disabled={loading || !query.trim()}
+              className="px-3 py-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white text-xs font-semibold disabled:opacity-40 transition-all hover:shadow-md active:scale-95">
+              {loading ? <div className="spinner-sm" /> : "Go"}
+            </button>
+          </div>
+          {/* filter row */}
+          <div className="flex gap-1.5 mt-1.5">
+            <div className="relative flex-1">
+              <select value={docType} onChange={e => setDocType(e.target.value)}
+                className="w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-[10px] appearance-none cursor-pointer outline-none focus:ring-1 focus:ring-indigo-400/30 focus:border-indigo-400 text-slate-600 pr-6">
+                {DOC_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <svg className="absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+            <div className="relative flex-1">
+              <select value={agent} onChange={e => setAgent(e.target.value)}
+                className="w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-[10px] appearance-none cursor-pointer outline-none focus:ring-1 focus:ring-indigo-400/30 focus:border-indigo-400 text-slate-600 pr-6">
+                <option value="">All Agents</option>
+                {AGENT_OPTIONS.filter((o: any) => o.value).map((o: any) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <svg className="absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+            <div className="relative flex-1">
+              <select value={status} onChange={e => setStatus(e.target.value)}
+                className="w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-[10px] appearance-none cursor-pointer outline-none focus:ring-1 focus:ring-indigo-400/30 focus:border-indigo-400 text-slate-600 pr-6">
+                {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <svg className="absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        {/* doc / result list */}
+        <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1.5">
+          {docsLoading && [...Array(3)].map((_, i) => (
+            <div key={i} className="h-16 rounded-xl bg-slate-100 animate-pulse" />
+          ))}
+          {!docsLoading && !searched && docs.length === 0 && (
+            <div className="text-center py-10 text-slate-400">
+              <p className="text-3xl mb-1">📄</p>
+              <p className="text-xs font-medium">No documents</p>
+            </div>
+          )}
+          {searched && !loading && results.length === 0 && (
+            <div className="text-center py-10 text-slate-400">
+              <p className="text-3xl mb-1">🔍</p>
+              <p className="text-xs font-medium">No results</p>
+            </div>
+          )}
+          {Array.isArray(displayedItems) && displayedItems.map((item: any, i: number) => {
+            const isSearchResult = searched && item.score !== undefined;
+            const doc = isSearchResult ? allDocs.find((d: any) => d.id === item.document_id) : item;
+            const isSelected = selectedChatDocIds.includes(isSearchResult ? item.document_id : item.id);
+            return (
+              <div key={isSearchResult ? `r-${i}` : item.id}
+                className={`p-3 rounded-xl border transition-all duration-200 cursor-pointer
+                  ${isSelected ? "border-indigo-300 bg-indigo-50/50" : "border-slate-200 bg-white hover:border-slate-300"}
+                  ${isSearchResult ? "hover:border-indigo-300" : ""}`}
+                onClick={() => {
+                  if (isSearchResult) onOpenDoc(item);
+                }}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={isSelected}
+                        onChange={() => toggleDocForChat(isSearchResult ? item.document_id : item.id)}
+                        className="checkbox checkbox-xs rounded border-slate-300 [--chkbg:#6366f1] shrink-0"
+                        onClick={e => e.stopPropagation()} />
+                      <p className="font-semibold text-xs text-slate-800 truncate">
+                        {doc?.title || item.document_title || item.title || "Untitled"}
+                      </p>
+                    </div>
+                    <div className="flex gap-1 mt-1 ml-5">
+                      <span className={`badge badge-xs ${typeColor(doc?.document_type || item.document_type)}`}>
+                        {doc?.document_type || item.document_type || "unknown"}
+                      </span>
+                      {isSearchResult && (
+                        <span className={`badge badge-xs ${(item.score || 0) > 0.7 ? "badge-success" : (item.score || 0) > 0.4 ? "badge-warning" : "badge-ghost"}`}>
+                          {(item.score * 100).toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+                    {isSearchResult && item.chunk_text && (
+                      <p className="text-[10px] text-slate-400 mt-1 ml-5 leading-relaxed line-clamp-2">
+                        {item.chunk_text.slice(0, 150)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {searched && results.length > 0 && results.length < total && (
+            <button onClick={loadMore} disabled={loading}
+              className="w-full text-center py-2 text-xs text-slate-400 hover:text-indigo-500 transition-colors">
+              {loading ? "Loading..." : `Load More (${results.length}/${total})`}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── right panel: chat ── */}
+      <div className="flex-1 flex flex-col bg-white">
+        {/* chat header */}
+        <div className="shrink-0 flex items-center gap-2 px-5 py-3 border-b border-slate-100">
+          <div className="w-7 h-7 rounded-lg gradient-primary flex items-center justify-center shadow-md">
+            <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+          </div>
+          <span className="text-sm font-semibold text-slate-700">Ask about documents</span>
+          {selectedChatDocIds.length > 0 && (
+            <span className="text-[10px] text-indigo-500 font-medium ml-auto">{selectedChatDocIds.length} doc{selectedChatDocIds.length > 1 ? "s" : ""} selected</span>
+          )}
+        </div>
+
+        {/* messages */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+          {messages.length === 0 && !chatLoading && (
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center max-w-sm">
+                <div className="w-12 h-12 rounded-2xl gradient-primary flex items-center justify-center mx-auto mb-3 shadow-lg shadow-indigo-500/20">
+                  <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+                  </svg>
+                </div>
+                <h3 className="text-base font-bold text-slate-700 mb-1">Ask anything</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Select documents from the left panel with checkboxes, then ask questions. Search to find specific content.
+                </p>
+              </div>
+            </div>
+          )}
+          {messages.map((m, i) => (
+            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"} message-appear`}>
+              <div className={`max-w-[80%] ${m.role === "user" ? "" : ""}`}>
+                {m.role === "user" ? (
+                  <div className="px-3.5 py-2.5 rounded-2xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-md">
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{m.content}</p>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2">
+                    <div className="w-7 h-7 rounded-xl gradient-primary flex items-center justify-center shadow-md shrink-0 mt-0.5">
+                      <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+                      </svg>
+                    </div>
+                    <div className="px-3.5 py-2.5 rounded-2xl bg-slate-50 border border-slate-200/60 shadow-sm">
+                      <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">{m.content}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {chatLoading && (
+            <div className="flex justify-start message-appear">
+              <div className="flex items-start gap-2">
+                <div className="w-7 h-7 rounded-xl gradient-primary flex items-center justify-center shadow-md shrink-0">
+                  <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+                  </svg>
+                </div>
+                <div className="px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200/60 shadow-sm">
+                  <TypingDots />
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={chatBottomRef} />
+        </div>
+
+        {/* sources */}
+        {sources.length > 0 && (
+          <div className="shrink-0 px-5 py-1.5 border-t border-slate-100 bg-slate-50/50">
+            <details className="group">
+              <summary className="text-[10px] font-medium text-slate-400 cursor-pointer hover:text-slate-600 transition-colors list-none flex items-center gap-1">
+                <svg className="w-2.5 h-2.5 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+                {sources.length} source{sources.length > 1 ? "s" : ""}
+              </summary>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {sources.map((s: any, i: number) => (
+                  <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-[10px] text-slate-600 shadow-sm">
+                    <span className="font-medium">{s.document_title?.slice(0, 20) || s.document_id?.slice(0, 8)}</span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-slate-400">{(s.score * 100).toFixed(0)}%</span>
+                  </span>
+                ))}
+              </div>
+            </details>
+          </div>
+        )}
+
+        {/* chat input */}
+        <div className="shrink-0 px-4 py-2.5 border-t border-slate-100">
+          <div className="flex items-center gap-2 bg-slate-50 rounded-2xl border border-slate-200 focus-within:ring-2 focus-within:ring-indigo-400/30 focus-within:border-indigo-400 transition-all">
+            <input value={chatInput} onChange={e => setChatInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && sendChat()}
+              className="flex-1 bg-transparent px-3.5 py-2.5 text-sm outline-none text-slate-700 placeholder:text-slate-400"
+              placeholder="Ask a question..." disabled={chatLoading} />
+            <button onClick={sendChat} disabled={chatLoading || !chatInput.trim()}
+              className="mr-1 p-1.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all hover:shadow-md active:scale-95">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
               </svg>
             </button>

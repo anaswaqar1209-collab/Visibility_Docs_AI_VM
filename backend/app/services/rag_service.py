@@ -631,6 +631,49 @@ class RAGService:
         except Exception as e:
             print(f"[IMAGE-INDEX] DB save FAILED: {e}")
 
+    def _resolve_doc_filters(self, organization_id: str, document_type: str = None,
+                              phase3_agent: str = None, status: str = None,
+                              date_from: str = None, date_to: str = None) -> list[str] | None:
+        filters = {"organization_id": organization_id}
+        if document_type:
+            filters["document_type"] = document_type
+        if phase3_agent:
+            filters["phase3_agent"] = phase3_agent
+        if status:
+            filters["status"] = status
+
+        if not any([document_type, phase3_agent, status, date_from, date_to]):
+            return None
+
+        try:
+            from ..database import _local_select, _get_supabase, _use_supabase, SupabaseDB
+            result = SupabaseDB.select("documents", columns="id", filters=filters, limit=10000)
+            data = getattr(result, "data", result if isinstance(result, list) else [])
+            ids = [r["id"] for r in data if isinstance(r, dict)]
+            if not ids:
+                return []
+
+            if date_from or date_to:
+                local_result = _local_select("documents", columns="id", filters={"organization_id": organization_id})
+                local_data = getattr(local_result, "data", local_result if isinstance(local_result, list) else [])
+                import re
+                filtered = []
+                for r in local_data:
+                    if isinstance(r, dict):
+                        created = r.get("created_at", "")
+                        if created:
+                            if date_from and created < date_from:
+                                continue
+                            if date_to and created > date_to + "T23:59:59":
+                                continue
+                            if r["id"] in ids:
+                                filtered.append(r["id"])
+                ids = filtered
+
+            return ids
+        except Exception:
+            return None
+
     def _fetch_doc_titles(self, doc_ids: list[str], org_id: str) -> dict:
         titles = {}
         if not doc_ids:
@@ -653,11 +696,30 @@ class RAGService:
             pass
         return titles
 
-    def hybrid_search(self, query: str, organization_id: str, document_type: str = None, document_ids: list = None, limit: int = 10, offset: int = 0) -> list[dict]:
+    def hybrid_search(self, query: str, organization_id: str, document_type: str = None,
+                      phase3_agent: str = None, status: str = None,
+                      date_from: str = None, date_to: str = None,
+                      document_ids: list = None, limit: int = 20, offset: int = 0) -> list[dict]:
         from .orchestration_logger import get_chat_logger
         chat_log = get_chat_logger()
 
-        print(f"\n[SEARCH] Query: '{query}' | org={organization_id} | type={document_type or 'all'} | docs={document_ids or 'all'} | limit={limit}")
+        # Resolve doc-level filters into document_ids
+        filter_doc_ids = self._resolve_doc_filters(
+            organization_id=organization_id,
+            document_type=document_type,
+            phase3_agent=phase3_agent,
+            status=status,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if filter_doc_ids is not None:
+            if document_ids:
+                merged_set = set(document_ids) & set(filter_doc_ids)
+                document_ids = list(merged_set) if merged_set else []
+            else:
+                document_ids = filter_doc_ids
+
+        print(f"\n[SEARCH] Query: '{query}' | org={organization_id} | type={document_type or 'all'} | agent={phase3_agent or 'all'} | status={status or 'all'} | docs={len(document_ids) if document_ids else 'all'} | limit={limit}")
         query_embedding = embedding_service.embed_query(query)
         results = []
         seen_ids = set()
@@ -668,6 +730,8 @@ class RAGService:
         pinecone_filter_desc = []
         if document_type:
             pinecone_filter_desc.append(f"type={document_type}")
+        if phase3_agent:
+            pinecone_filter_desc.append(f"agent={phase3_agent}")
         if document_ids:
             pinecone_filter_desc.append(f"doc_ids={len(document_ids)}")
         chat_log.search_strategy("Pinecone Vector Search", ", ".join(pinecone_filter_desc) if pinecone_filter_desc else "no filter")
@@ -676,6 +740,8 @@ class RAGService:
             filter_dict = {"organization_id": organization_id}
             if document_type:
                 filter_dict["document_type"] = document_type
+            if phase3_agent:
+                filter_dict["phase3_agent"] = phase3_agent
             if document_ids:
                 filter_dict["document_id"] = {"$in": document_ids}
             print(f"[SEARCH] Querying Pinecone (ns='{organization_id}')...")

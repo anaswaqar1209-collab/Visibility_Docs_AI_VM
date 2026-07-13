@@ -19,10 +19,15 @@ async def search_documents(request: SearchRequest = Body(...)):
         query=request.query,
         organization_id=request.organization_id,
         document_type=request.document_type,
+        phase3_agent=request.phase3_agent,
+        status=request.status,
+        date_from=request.date_from,
+        date_to=request.date_to,
         limit=request.limit,
         offset=request.offset,
     )
 
+    total_before_offset = len(results)
     search_results = [
         SearchResult(
             document_id=r["document_id"],
@@ -38,7 +43,7 @@ async def search_documents(request: SearchRequest = Body(...)):
 
     return SearchResponse(
         results=search_results,
-        total=len(search_results),
+        total=total_before_offset,
         query=request.query,
     )
 
@@ -53,13 +58,21 @@ async def search_get(
     query: str = Query(..., min_length=1, description="Search query"),
     organization_id: str = Query("", description="Tenant organization ID"),
     document_type: str = Query(None, description="Filter by document type"),
-    limit: int = Query(10, ge=1, le=100, description="Max results"),
+    phase3_agent: str = Query(None, description="Filter by phase3 agent"),
+    status: str = Query(None, description="Filter by document status"),
+    date_from: str = Query(None, description="Start date (ISO format)"),
+    date_to: str = Query(None, description="End date (ISO format)"),
+    limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Result offset"),
 ):
     return await search_documents(SearchRequest(
         query=query,
         organization_id=organization_id,
         document_type=document_type,
+        phase3_agent=phase3_agent,
+        status=status,
+        date_from=date_from,
+        date_to=date_to,
         limit=limit,
         offset=offset,
     ))

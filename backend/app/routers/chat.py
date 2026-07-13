@@ -57,6 +57,11 @@ async def chat_with_document(request: ChatRequest = Body(...)):
         question=request.question,
         document_ids=doc_ids,
         organization_id=request.organization_id,
+        document_type=request.document_type,
+        phase3_agent=request.phase3_agent,
+        status=request.status,
+        date_from=request.date_from,
+        date_to=request.date_to,
         chat_history=request.chat_history,
         session_id=request.session_id,
     )
@@ -84,6 +89,11 @@ async def chat_all_documents(request: ChatRequest = Body(...)):
         question=request.question,
         document_ids=[],
         organization_id=request.organization_id,
+        document_type=request.document_type,
+        phase3_agent=request.phase3_agent,
+        status=request.status,
+        date_from=request.date_from,
+        date_to=request.date_to,
         chat_history=request.chat_history,
         session_id=request.session_id,
     )
