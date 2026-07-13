@@ -16,12 +16,13 @@ class FileType(str, Enum):
     DIGITAL_PDF = "digital_pdf"
     SCANNED_PDF = "scanned_pdf"
     DOCX = "docx"
+    XLSX = "xlsx"
+    PPTX = "pptx"
     TXT = "txt"
     IMAGE = "image"
 
 
 ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
-TEXT_IMAGE_EXT = ALLOWED_IMAGE_EXT | {".pdf", ".docx", ".txt"}
 
 
 def _is_image_ext(ext: str) -> bool:
@@ -33,6 +34,10 @@ def detect_file_type(file_path: str) -> FileType:
 
     if ext == ".docx":
         return FileType.DOCX
+    if ext == ".xlsx":
+        return FileType.XLSX
+    if ext == ".pptx":
+        return FileType.PPTX
     if ext == ".txt":
         return FileType.TXT
     if _is_image_ext(ext):
@@ -135,6 +140,56 @@ def _extract_txt(file_path: str) -> str:
             continue
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         return f.read()
+
+
+def _extract_xlsx(file_path: str) -> str:
+    import openpyxl
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    parts = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        parts.append(f"## Sheet: {sheet_name}")
+        rows_data = []
+        for row in ws.iter_rows(values_only=True):
+            cells = [str(c) if c is not None else "" for c in row]
+            rows_data.append(cells)
+        if rows_data:
+            ncols = max(len(r) for r in rows_data)
+            sep = "| " + " | ".join(["---"] * ncols) + " |"
+            parts.append("| " + " | ".join(rows_data[0]) + " |")
+            parts.append(sep)
+            for cells in rows_data[1:]:
+                parts.append("| " + " | ".join(cells) + " |")
+        parts.append("")
+    wb.close()
+    result = "\n".join(parts)
+    return _normalize_markdown(result)
+
+
+def _extract_pptx(file_path: str) -> str:
+    from pptx import Presentation
+    prs = Presentation(file_path)
+    parts = []
+    for slide_idx, slide in enumerate(prs.slides, 1):
+        slide_texts = [f"--- Slide {slide_idx} ---"]
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    t = para.text.strip()
+                    if t:
+                        slide_texts.append(t)
+            if shape.has_table:
+                table = shape.table
+                md_rows = []
+                for row_idx, row in enumerate(table.rows):
+                    cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+                    md_rows.append("| " + " | ".join(cells) + " |")
+                    if row_idx == 0:
+                        md_rows.append("| " + " | ".join(["---"] * len(cells)) + " |")
+                slide_texts.append("\n".join(md_rows))
+        parts.append("\n".join(slide_texts))
+    result = "\n\n".join(parts)
+    return _normalize_markdown(result)
 
 
 def _page_to_image(page) -> str:
@@ -287,6 +342,16 @@ def process_document(file_path: str) -> dict:
         text = _extract_docx(file_path)
         page_count = max(1, len(text) // 2000)
         source = "docx"
+
+    elif file_type == FileType.XLSX:
+        text = _extract_xlsx(file_path)
+        page_count = max(1, len(text) // 2000)
+        source = "xlsx"
+
+    elif file_type == FileType.PPTX:
+        text = _extract_pptx(file_path)
+        page_count = max(1, len(text) // 2000)
+        source = "pptx"
 
     elif file_type == FileType.TXT:
         text = _extract_txt(file_path)

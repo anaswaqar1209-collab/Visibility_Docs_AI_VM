@@ -7,7 +7,6 @@ from .ocr_service import ocr_service
 from .agent_orchestrator import classification_agent, category_agents, DOCUMENT_TO_PHASE3_AGENT
 from .classification_service import classification_service
 from .rag_service import rag_service
-from .preprocessing_service import preprocessing_service
 from .orchestration_logger import (OrchestrationLogger, get_logger, reset_logger, C)
 
 logger = logging.getLogger("visibility-docs")

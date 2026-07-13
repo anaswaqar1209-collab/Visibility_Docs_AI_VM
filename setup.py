@@ -31,7 +31,6 @@ def main():
     print("\n[2/4] Setting up environment...")
     env_path = os.path.join(BASE_DIR, "backend", ".env")
     if not os.path.exists(env_path):
-        shutil_copy = False
         try:
             import shutil
             shutil.copy(

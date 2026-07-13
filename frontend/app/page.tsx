@@ -494,7 +494,7 @@ function UploadBox({ onUpload }: any) {
         onClick={() => ref.current?.click()}
         className={`relative cursor-pointer rounded-xl border-2 border-dashed p-5 text-center transition-all duration-200
           ${drag ? "border-indigo-400 bg-indigo-50/50" : "border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30"}`}>
-        <input ref={ref} type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png,.tiff,.tif,.docx,.xlsx,.pptx"
+        <input ref={ref} type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png,.tiff,.tif,.bmp,.webp,.docx,.xlsx,.pptx,.txt"
           onChange={e => e.target.files && addFiles(e.target.files)} />
         <div className="flex flex-col items-center gap-1.5">
           <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center">

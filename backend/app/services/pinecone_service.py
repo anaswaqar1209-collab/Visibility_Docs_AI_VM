@@ -51,9 +51,6 @@ class PineconeService:
             logger.error(f"Pinecone upsert error: {e}")
             print(f"[PINECONE] Upsert FAILED: {e}")
 
-    def upsert_one(self, vector_id: str, embedding: list[float], metadata: dict, namespace: str = ""):
-        self.upsert([(vector_id, embedding, metadata)], namespace=namespace)
-
     def query(self, embedding: list[float], top_k: int = 10, filter: dict = None, namespace: str = "", include_metadata: bool = True) -> list[dict]:
         if not self._available:
             print(f"[PINECONE] Not available - skipping query")
@@ -84,42 +81,6 @@ class PineconeService:
             print(f"[PINECONE] Query FAILED: {e}")
             return []
 
-    def query_batch(self, embeddings: list[list[float]], top_k: int = 10, filter: dict = None, namespace: str = "", include_metadata: bool = True) -> list[list[dict]]:
-        if not self._available or not embeddings:
-            return []
-        try:
-            print(f"[PINECONE] Batch query: {len(embeddings)} vectors, top_k={top_k}, ns='{namespace}'")
-            t0 = __import__("time").time()
-            results = self._index.query(
-                vector=embeddings,
-                top_k=top_k,
-                include_metadata=include_metadata,
-                filter=filter,
-                namespace=namespace,
-            )
-            duration = __import__("time").time() - t0
-            print(f"[PINECONE] Batch query done in {duration:.2f}s")
-            if not results:
-                return []
-            return [
-                [{"id": m.id, "score": m.score, "metadata": m.metadata if include_metadata else {}} for m in r.matches]
-                for r in results
-            ]
-        except Exception as e:
-            logger.error(f"Pinecone batch query error: {e}")
-            print(f"[PINECONE] Batch query FAILED: {e}")
-            return []
-
-    def delete_by_filter(self, filter: dict, namespace: str = ""):
-        if not self._available:
-            return
-        try:
-            print(f"[PINECONE] Delete by filter: {filter} (ns='{namespace}')")
-            self._index.delete(filter=filter, namespace=namespace)
-            print(f"[PINECONE] Delete by filter done")
-        except Exception as e:
-            logger.error(f"Pinecone delete error: {e}")
-
     def delete_by_document(self, document_id: str, namespace: str = ""):
         if not self._available:
             return
@@ -129,16 +90,6 @@ class PineconeService:
             print(f"[PINECONE] Document vectors deleted")
         except Exception as e:
             logger.error(f"Pinecone delete_by_document error: {e}")
-
-    def delete_by_id(self, vector_id: str, namespace: str = ""):
-        if not self._available:
-            return
-        try:
-            print(f"[PINECONE] Delete by id: {vector_id} (ns='{namespace}')")
-            self._index.delete(ids=[vector_id], namespace=namespace)
-            print(f"[PINECONE] Delete by id done")
-        except Exception as e:
-            logger.error(f"Pinecone delete error: {e}")
 
     @property
     def available(self):

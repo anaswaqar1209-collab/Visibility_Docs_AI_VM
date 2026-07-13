@@ -67,27 +67,6 @@ class GroqService:
             last = " ".join(texts)
         return f"[Groq API not configured. Please set GROQ_API_KEY in .env]\n\nReceived: {str(last)[:200]}"
 
-    def summarize_document(self, text: str, max_length: int = 500) -> str:
-        prompt = f"Summarize this document concisely (max {max_length} words):\n\n{text[:4000]}"
-        return self.chat([{"role": "user", "content": prompt}], temperature=0.1, max_tokens=1024)
-
-    def answer_question(self, question: str, context: str, chat_history: list[dict] = None) -> str:
-        if not self.available:
-            return "Groq API is not configured. Please set GROQ_API_KEY in your .env file."
-
-        messages = [{"role": "system", "content": "You are a document analysis assistant. Answer questions based ONLY on the provided document context. If the answer is not in the context, say 'I cannot find this information in the document.'"}]
-
-        if chat_history:
-            for msg in chat_history[-5:]:
-                messages.append(msg)
-
-        messages.append({
-            "role": "user",
-            "content": f"Document Context:\n{context}\n\nQuestion: {question}"
-        })
-
-        return self.chat(messages, temperature=0.1, max_tokens=2048)
-
     def _parse_json(self, text: str, default: dict) -> dict:
         try:
             json_match = re.search(r'\{.*\}', text, re.DOTALL)

@@ -74,10 +74,4 @@ class HFStorage:
             logger.error(f"HF upload_bytes failed: {e}")
             return ""
 
-    def get_url(self, remote_path: str) -> str:
-        if not self._repo_id:
-            return ""
-        return f"https://huggingface.co/datasets/{self._repo_id}/resolve/main/{remote_path}"
-
-
 hf_storage = HFStorage()

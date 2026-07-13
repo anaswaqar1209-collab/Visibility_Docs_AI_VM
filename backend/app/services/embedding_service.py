@@ -2,7 +2,6 @@ import numpy as np
 import threading
 import logging
 import hashlib
-import functools
 from .pinecone_service import pinecone_service
 
 logger = logging.getLogger("visibility-docs")
@@ -122,11 +121,5 @@ class EmbeddingService:
 
     def embed_query(self, query: str) -> list[float]:
         return self.embed_text(query)
-
-    def cosine_similarity(self, a: list[float], b: list[float]) -> float:
-        a_np = np.array(a)
-        b_np = np.array(b)
-        return float(np.dot(a_np, b_np) / (np.linalg.norm(a_np) * np.linalg.norm(b_np) + 1e-10))
-
 
 embedding_service = EmbeddingService()

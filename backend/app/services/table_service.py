@@ -1,9 +1,6 @@
 import os
 import re
-import tempfile
 import logging
-import subprocess
-from typing import Optional
 
 import pdfplumber
 import pandas as pd
@@ -11,10 +8,6 @@ import cv2
 import numpy as np
 
 logger = logging.getLogger("visibility-docs")
-
-
-class TableExtractionError(Exception):
-    pass
 
 
 def _camelot_available() -> bool:

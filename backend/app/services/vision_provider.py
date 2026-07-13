@@ -64,59 +64,6 @@ def _is_blank_b64(b64_str: str, threshold: float = 10.0) -> bool:
         return False
 
 
-def crop_image_region(
-    image_path: str,
-    bbox: Optional[list] = None,
-    padding: int = 10,
-) -> str:
-    if bbox is None:
-        return image_path
-    try:
-        import cv2
-        import numpy as np
-    except ImportError:
-        return image_path
-
-    img = cv2.imread(image_path)
-    if img is None:
-        return image_path
-
-    h, w = img.shape[:2]
-    coords = bbox[::2] if len(bbox) >= 4 else [0, w]
-    x1 = max(0, int(min(coords)) - padding)
-    y1 = max(0, int(min(bbox[1::2])) - padding) if len(bbox) >= 4 else 0
-    x2 = min(w, int(max(coords)) + padding)
-    y2 = min(h, int(max(bbox[1::2])) + padding) if len(bbox) >= 4 else h
-
-    cropped = img[y1:y2, x1:x2]
-    if cropped.size == 0:
-        return image_path
-
-    base, ext = os.path.splitext(image_path)
-    crop_path = f"{base}_crop{ext}"
-    cv2.imwrite(crop_path, cropped)
-    return crop_path
-
-
-def encode_image_to_base64(image_path: str) -> str:
-    with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def get_image_format(image_path: str) -> str:
-    ext = os.path.splitext(image_path)[1].lower()
-    format_map = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".bmp": "image/bmp",
-        ".tiff": "image/tiff",
-        ".tif": "image/tiff",
-        ".webp": "image/webp",
-    }
-    return format_map.get(ext, "image/png")
-
-
 class VisionProvider:
     SUPPORTED_PROVIDERS = {"openai", "groq", "ollama"}
 

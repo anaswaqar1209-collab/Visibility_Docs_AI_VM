@@ -2,7 +2,6 @@ import os
 import json
 import asyncio
 import logging
-import functools
 from concurrent.futures import ThreadPoolExecutor
 from ..database import SupabaseDB
 from ..config import settings
