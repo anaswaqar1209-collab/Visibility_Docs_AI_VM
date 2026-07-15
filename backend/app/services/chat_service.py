@@ -330,37 +330,46 @@ class ChatService:
         dominant_agent = max(agent_counts, key=agent_counts.get) if agent_counts else "other_agent"
         agent_label = dominant_agent.replace("_", " ").title()
 
-        # Load the actual agent .md prompt for domain-specific context
-        agent_domain_context = ""
+        # Load the full agent .md prompt and adapt it for Q&A
+        qa_prompt = ""
         try:
             raw_prompt = _load_phase3_prompt(f"{dominant_agent}.md")
             if raw_prompt:
                 import re
-                header_match = re.match(r"^(.*?)(?=\n##|\Z)", raw_prompt, re.DOTALL)
-                if header_match:
-                    agent_domain_context = header_match.group(1).strip()
+                qa_prompt = raw_prompt.replace("{text}", "{context}")
+                # Remove extraction-specific JSON instructions, keep Document text line
+                qa_prompt = re.sub(
+                    r"Return ONLY valid JSON\..*?(?=\nDocument text:)",
+                    "Answer the user's question based ONLY on the provided document context below.",
+                    qa_prompt,
+                    flags=re.DOTALL,
+                )
+                # Remove the now-unnecessary "Document text:" line
+                qa_prompt = qa_prompt.replace("\nDocument text:\n{context}", "")
+                qa_prompt += (
+                    "\n\nRules:\n"
+                    "1. Answer concisely and directly using the context.\n"
+                    "2. If the context contains image/vision descriptions, use them to answer.\n"
+                    "3. If the answer is NOT in the context, say \"I cannot find this information in the documents.\"\n"
+                    "4. Do NOT make up or hallucinate information.\n"
+                    "5. Do NOT output JSON or extract fields — just answer the question naturally.\n"
+                    "6. If the context has tables or diagrams, explain what they show.\n"
+                )
+                resume_rank_instruction = (
+                    "\n7. The context may include a [Resume Rankings] block with CV evaluation scores. "
+                    "Use those scores to rank, compare, or recommend candidates when asked.\n"
+                ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
+                qa_prompt += resume_rank_instruction
         except Exception:
             pass
 
-        resume_rank_instruction = (
-            "\n7. The context may include a [Resume Rankings] block with CV evaluation scores. "
-            "Use those scores to rank, compare, or recommend candidates when asked.\n"
-        ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
-
-        if agent_domain_context:
-            qa_prompt = (
-                f"{agent_domain_context}\n\n"
-                "Your job is to answer the user's question based ONLY on the provided document context below.\n\n"
-                "Rules:\n"
-                "1. Answer concisely and directly using the context.\n"
-                "2. If the context contains image/vision descriptions, use them to answer.\n"
-                "3. If the answer is NOT in the context, say \"I cannot find this information in the documents.\"\n"
-                "4. Do NOT make up or hallucinate information.\n"
-                "5. Do NOT output JSON or extract fields — just answer the question.\n"
-                "6. If the context has tables or diagrams, explain what they show.\n"
-                f"{resume_rank_instruction}"
-            )
-        else:
+        if not qa_prompt:
+            # Fallback: generic prompt with agent label
+            agent_label = dominant_agent.replace("_", " ").title()
+            resume_rank_instruction = (
+                "\n7. The context may include a [Resume Rankings] block with CV evaluation scores. "
+                "Use those scores to rank, compare, or recommend candidates when asked.\n"
+            ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
             qa_prompt = (
                 f"You are the {agent_label} — a document Q&A assistant for Visibility Docs AI.\n\n"
                 "Your job is to answer the user's question based ONLY on the provided document context below.\n\n"
