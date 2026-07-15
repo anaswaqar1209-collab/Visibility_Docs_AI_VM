@@ -833,12 +833,15 @@ class RAGService:
         from .orchestration_logger import get_chat_logger
         chat_log = get_chat_logger()
 
+        # Default to only searching processed documents
+        effective_status = status if status else "processed"
+
         # Resolve doc-level filters into document_ids
         filter_doc_ids = self._resolve_doc_filters(
             organization_id=organization_id,
             document_type=document_type,
             phase3_agent=phase3_agent,
-            status=status,
+            status=effective_status,
             date_from=date_from,
             date_to=date_to,
         )
@@ -1036,10 +1039,10 @@ class RAGService:
         vec_title_map = self._fetch_doc_titles(vec_doc_ids, organization_id) if vec_doc_ids else {}
         for item in getattr(vector_results, "data", vector_results if isinstance(vector_results, list) else []):
             chunk = item if isinstance(item, dict) else {}
-            if document_type and chunk.get("document_type") != document_type:
-                continue
             did = chunk.get("document_id", "")
             title, dtype, p3a = vec_title_map.get(did, ("", "", ""))
+            if document_type and dtype != document_type:
+                continue
             sqs_res.append({
                 "document_id": did,
                 "document_title": title or chunk.get("document_title", ""),

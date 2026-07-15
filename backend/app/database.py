@@ -475,6 +475,19 @@ class SupabaseDB:
         conn.commit()
 
     @staticmethod
+    def update_chat_session_doc_ids(session_id: str, document_ids: list):
+        try:
+            client = _get_supabase()
+            if _use_supabase and client:
+                client.table("chat_sessions").update({"document_ids": document_ids}).eq("id", session_id).execute()
+        except Exception:
+            pass
+        conn = _get_local_db()
+        doc_ids_json = __import__("json").dumps(document_ids)
+        conn.execute("UPDATE chat_sessions SET document_ids=? WHERE id=?", (doc_ids_json, session_id))
+        conn.commit()
+
+    @staticmethod
     def delete_chat_session(session_id: str):
         try:
             client = _get_supabase()

@@ -72,6 +72,11 @@ class ChatService:
             __import__("re").search(kw, q_lower) for kw in _RESUME_KEYWORDS
         )
 
+        if not search_results and not is_resume_query and document_type:
+            chat_log.warn(f"No results with document_type={document_type} — retrying without type filter")
+            retry_kwargs = {k: v for k, v in hybrid_kwargs.items() if k != "document_type"}
+            search_results = rag_service.hybrid_search(**retry_kwargs)
+
         if not search_results:
             resumes = []
             if is_resume_query:
@@ -214,23 +219,49 @@ class ChatService:
         dominant_agent = max(agent_counts, key=agent_counts.get) if agent_counts else "other_agent"
         agent_label = dominant_agent.replace("_", " ").title()
 
+        # Load the actual agent .md prompt for domain-specific context
+        agent_domain_context = ""
+        try:
+            raw_prompt = _load_phase3_prompt(f"{dominant_agent}.md")
+            if raw_prompt:
+                import re
+                header_match = re.match(r"^(.*?)(?=\n##|\Z)", raw_prompt, re.DOTALL)
+                if header_match:
+                    agent_domain_context = header_match.group(1).strip()
+        except Exception:
+            pass
+
         resume_rank_instruction = (
             "\n7. The context may include a [Resume Rankings] block with CV evaluation scores. "
             "Use those scores to rank, compare, or recommend candidates when asked.\n"
         ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
 
-        qa_prompt = (
-            f"You are the {agent_label} — a document Q&A assistant for Visibility Docs AI.\n\n"
-            "Your job is to answer the user's question based ONLY on the provided document context below.\n\n"
-            "Rules:\n"
-            "1. Answer concisely and directly using the context.\n"
-            "2. If the context contains image/vision descriptions, use them to answer.\n"
-            "3. If the answer is NOT in the context, say \"I cannot find this information in the documents.\"\n"
-            "4. Do NOT make up or hallucinate information.\n"
-            "5. Do NOT output JSON or extract fields — just answer the question.\n"
-            "6. If the context has tables or diagrams, explain what they show.\n"
-            f"{resume_rank_instruction}"
-        )
+        if agent_domain_context:
+            qa_prompt = (
+                f"{agent_domain_context}\n\n"
+                "Your job is to answer the user's question based ONLY on the provided document context below.\n\n"
+                "Rules:\n"
+                "1. Answer concisely and directly using the context.\n"
+                "2. If the context contains image/vision descriptions, use them to answer.\n"
+                "3. If the answer is NOT in the context, say \"I cannot find this information in the documents.\"\n"
+                "4. Do NOT make up or hallucinate information.\n"
+                "5. Do NOT output JSON or extract fields — just answer the question.\n"
+                "6. If the context has tables or diagrams, explain what they show.\n"
+                f"{resume_rank_instruction}"
+            )
+        else:
+            qa_prompt = (
+                f"You are the {agent_label} — a document Q&A assistant for Visibility Docs AI.\n\n"
+                "Your job is to answer the user's question based ONLY on the provided document context below.\n\n"
+                "Rules:\n"
+                "1. Answer concisely and directly using the context.\n"
+                "2. If the context contains image/vision descriptions, use them to answer.\n"
+                "3. If the answer is NOT in the context, say \"I cannot find this information in the documents.\"\n"
+                "4. Do NOT make up or hallucinate information.\n"
+                "5. Do NOT output JSON or extract fields — just answer the question.\n"
+                "6. If the context has tables or diagrams, explain what they show.\n"
+                f"{resume_rank_instruction}"
+            )
         chat_log.info(f"Built Q&A prompt for agent: {dominant_agent} ({len(qa_prompt)} chars)")
 
         chat_log.llm_call("llama-3.3-70b-versatile", context_len, len(question), len(sources))
