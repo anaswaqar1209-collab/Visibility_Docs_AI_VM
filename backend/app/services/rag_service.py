@@ -432,6 +432,100 @@ def _markdown_aware_chunk(text: str, max_words: int = 250) -> list[dict]:
 
 
 class RAGService:
+    def _expand_query(self, query: str) -> list[str]:
+        """Generate alternative search queries via LLM for better recall."""
+        if not query or len(query) < 3:
+            return []
+        try:
+            from .groq_service import groq_service
+            prompt = (
+                "Given the user's search query below, generate 2 alternative versions "
+                "that would match the same information need but use DIFFERENT words. "
+                "Return ONLY a JSON array of strings, nothing else.\n\n"
+                f"Query: {query}"
+            )
+            resp = groq_service.chat(
+                [{"role": "user", "content": prompt}],
+                temperature=0.3, max_tokens=256,
+                model="llama-3.1-8b-instant",
+            )
+            import json
+            alt = json.loads(resp.strip())
+            if isinstance(alt, list) and len(alt) > 0:
+                valid = [q for q in alt if isinstance(q, str) and q.strip() and q != query]
+                print(f"[SEARCH] Query expansion: '{query}' → {valid}")
+                return valid[:2]
+        except Exception as e:
+            print(f"[SEARCH] Query expansion failed: {e}")
+        return []
+
+    def _rrf_fuse(self, per_strategy: list[list[dict]], k: int = 60) -> list[dict]:
+        """Reciprocal Rank Fusion — fair scoring across heterogeneous search strategies."""
+        rrf_map = {}
+        for strategy_res in per_strategy:
+            for rank, r in enumerate(strategy_res):
+                key = r.get("_rrf_key")
+                if not key:
+                    key = r["document_id"] + "::" + str(r.get("chunk_index", r.get("chunk_text", "")[:80]))
+                    r["_rrf_key"] = key
+                if key not in rrf_map:
+                    rrf_map[key] = {**r, "_rrf_score": 0.0, "_rank_sum": 0}
+                rrf_map[key]["_rrf_score"] += 1.0 / (k + rank)
+                rrf_map[key]["_rank_sum"] += rank
+        results = sorted(rrf_map.values(), key=lambda x: (-x["_rrf_score"], x["_rank_sum"]))
+        for r in results:
+            r["score"] = r["_rrf_score"]
+        return results
+
+    def _fetch_neighbor_chunks(self, chunks: list[dict], org_id: str) -> list[dict]:
+        """For each chunk, attach text of neighboring chunks (previous/next by chunk_index) for context."""
+        if not chunks:
+            return chunks
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for c in chunks:
+            did = c["document_id"]
+            ci = c.get("chunk_index")
+            if ci is not None:
+                groups[did].append((ci, c))
+        neighbor_texts = defaultdict(list)
+        for did, items in groups.items():
+            items.sort(key=lambda x: x[0])
+            indices = {ci: i for i, (ci, _) in enumerate(items)}
+            try:
+                result = SupabaseDB.select("document_chunks",
+                    columns="chunk_index, content",
+                    filters={"document_id": did, "organization_id": org_id, "chunk_type": "paragraph"},
+                    limit=50,
+                )
+                all_chunks = getattr(result, "data", result if isinstance(result, list) else [])
+                if isinstance(all_chunks, list):
+                    chunk_map = {}
+                    for rc in all_chunks:
+                        if isinstance(rc, dict):
+                            ci = rc.get("chunk_index")
+                            if ci is not None:
+                                chunk_map[ci] = rc.get("content", "")
+                    for ci, _ in items:
+                        prev_content = chunk_map.get(ci - 1, "")
+                        next_content = chunk_map.get(ci + 1, "")
+                        parts = []
+                        if prev_content:
+                            parts.append(f"[Previous section]: {prev_content[:800]}")
+                        parts.append(c["chunk_text"] if ci == c.get("chunk_index") else chunk_map.get(ci, c.get("chunk_text", "")))
+                        if next_content:
+                            parts.append(f"[Next section]: {next_content[:800]}")
+                        neighbor_texts[did + "::" + str(ci)].append("\n\n".join(parts))
+            except Exception:
+                pass
+        for c in chunks:
+            key = c["document_id"] + "::" + str(c.get("chunk_index", ""))
+            if key in neighbor_texts and neighbor_texts[key]:
+                nt = neighbor_texts[key][0]
+                if nt != c.get("chunk_text", ""):
+                    c["chunk_text"] = nt
+        return chunks
+
     def chunk_text(self, text: str, max_words: int = 250) -> list[dict]:
         if not text:
             return []
@@ -757,171 +851,175 @@ class RAGService:
 
         print(f"\n[SEARCH] Query: '{query}' | org={organization_id} | type={document_type or 'all'} | agent={phase3_agent or 'all'} | status={status or 'all'} | docs={len(document_ids) if document_ids else 'all'} | limit={limit}")
         query_embedding = embedding_service.embed_query(query)
-        results = []
-        seen_ids = set()
         import re
         query_words = [w for w in re.sub(r'[^\w\s]', ' ', query).lower().split() if len(w) >= 2]
 
-        # 1. Pinecone vector search (handles typos via embeddings)
-        pinecone_filter_desc = []
-        if document_type:
-            pinecone_filter_desc.append(f"type={document_type}")
-        if phase3_agent:
-            pinecone_filter_desc.append(f"agent={phase3_agent}")
-        if document_ids:
-            pinecone_filter_desc.append(f"doc_ids={len(document_ids)}")
-        chat_log.search_strategy("Pinecone Vector Search", ", ".join(pinecone_filter_desc) if pinecone_filter_desc else "no filter")
-        pinecone_before = len(results)
-        if pinecone_service.available:
-            filter_dict = {"organization_id": organization_id}
+        # ── Query expansion: generate alternative phrasings for better recall ──
+        alt_queries = self._expand_query(query)
+        alt_embeddings = []
+        for aq in alt_queries:
+            ae = embedding_service.embed_query(aq)
+            alt_embeddings.append(ae)
+        all_embeddings = [query_embedding] + alt_embeddings
+        if alt_queries:
+            chat_log.info(f"Query expansion: {len(alt_queries)} alternatives")
+
+        # Build filter for Pinecone
+        def _pinecone_filter():
+            f = {"organization_id": organization_id}
             if document_type:
-                filter_dict["document_type"] = document_type
+                f["document_type"] = document_type
             if phase3_agent:
-                filter_dict["phase3_agent"] = phase3_agent
+                f["phase3_agent"] = phase3_agent
             if document_ids:
-                filter_dict["document_id"] = {"$in": document_ids}
-            print(f"[SEARCH] Querying Pinecone (ns='{organization_id}')...")
-            pinecone_results = pinecone_service.query(query_embedding, top_k=limit + 10, filter=filter_dict if len(filter_dict) > 1 else None, namespace=organization_id)
-            if pinecone_results:
-                print(f"[SEARCH] Pinecone returned {len(pinecone_results)} results")
-                doc_ids = list(set(r["metadata"].get("document_id", "") for r in pinecone_results))
+                f["document_id"] = {"$in": document_ids}
+            return f if len(f) > 1 else None
+
+        per_strategy = []  # list of lists for RRF fusion
+
+        # ──── 1. Pinecone vector search (with query expansion) ────
+        chat_log.search_strategy("Pinecone Vector Search", f"queries={len(all_embeddings)}, top_k={limit + 10}")
+        pinecone_all = []
+        pinecone_seen_ids = set()
+        if pinecone_service.available:
+            pf = _pinecone_filter()
+            print(f"[SEARCH] Querying Pinecone (ns='{organization_id}') with {len(all_embeddings)} embeddings...")
+            for ei, emb in enumerate(all_embeddings):
+                tag = f"alt{ei}" if ei > 0 else "orig"
+                pr = pinecone_service.query(emb, top_k=limit + 10, filter=pf, namespace=organization_id)
+                if pr:
+                    print(f"[SEARCH] Pinecone [{tag}]: {len(pr)} results")
+                    for r in pr:
+                        pid = r.get("id", "")
+                        if pid not in pinecone_seen_ids:
+                            pinecone_seen_ids.add(pid)
+                            pinecone_all.append(r)
+            if pinecone_all:
+                print(f"[SEARCH] Pinecone merged: {len(pinecone_all)} unique results")
+                doc_ids = list(set(r["metadata"].get("document_id", "") for r in pinecone_all))
                 title_map = self._fetch_doc_titles(doc_ids, organization_id)
-                for r in pinecone_results:
+                pinecone_res = []
+                for r in pinecone_all:
                     meta = r.get("metadata", {})
                     did = meta.get("document_id", "")
                     title, dtype, p3a = title_map.get(did, ("", "", ""))
-                    chunk_id = r.get("id", "")
-                    if chunk_id in seen_ids:
-                        continue
-                    seen_ids.add(chunk_id)
                     if document_type and dtype != document_type:
                         continue
-                    results.append({
+                    ci = meta.get("chunk_index")
+                    pinecone_res.append({
                         "document_id": did,
                         "document_title": title,
                         "document_type": dtype or meta.get("_document_type"),
                         "phase3_agent": p3a,
                         "chunk_text": meta.get("chunk_text", "")[:3000],
                         "page_number": meta.get("page_number"),
+                        "chunk_index": ci,
                         "score": r.get("score", 0),
                         "metadata": meta,
                     })
-                scores = [r.get("score", 0) for r in pinecone_results]
-                score_range = f"top={max(scores):.3f}, bottom={min(scores):.3f}" if scores else ""
-                new_count = len(results) - pinecone_before
-                chat_log.search_result("Pinecone", len(pinecone_results), new_count, score_range)
-                print(f"[SEARCH] Pinecone results processed: {new_count} new / {len(results)} total unique")
+                per_strategy.append(pinecone_res)
+                chat_log.search_result("Pinecone", len(pinecone_all), len(pinecone_res), f"from {len(all_embeddings)} queries")
+                print(f"[SEARCH] Pinecone results: {len(pinecone_res)} after dedup")
             else:
                 chat_log.search_result("Pinecone", 0, 0, "no results")
                 print(f"[SEARCH] Pinecone returned no results")
         else:
             chat_log.search_result("Pinecone", 0, 0, "unavailable")
 
-        # 2. FTS5 keyword search (prefix matching)
-        fts5_before = len(results)
+        # ──── 2. FTS5 keyword search ────
         chat_log.search_strategy("FTS5 Keyword Search", f"words: {len(query_words)}")
         print(f"[SEARCH] Running keyword search (FTS5)...")
         try:
             from ..database import _local_keyword_search
             kw_results = _local_keyword_search(query, organization_id, limit=limit * 2)
+            fts5_res = []
             if kw_results:
-                print(f"[SEARCH] Keywords returned {len(kw_results)} results")
+                print(f"[SEARCH] FTS5 returned {len(kw_results)} results")
                 doc_ids = list(set(r["document_id"] for r in kw_results))
                 title_map = self._fetch_doc_titles(doc_ids, organization_id)
                 for item in kw_results:
                     did = item.get("document_id", "")
-                    chunk_id = item.get("id", "")
-                    if chunk_id in seen_ids:
-                        continue
-                    seen_ids.add(chunk_id)
                     title, dtype, p3a = title_map.get(did, ("", "", ""))
                     if document_type and dtype != document_type:
                         continue
-                    results.append({
+                    fts5_res.append({
                         "document_id": did,
                         "document_title": title,
                         "document_type": dtype,
                         "phase3_agent": p3a,
                         "chunk_text": item.get("content", "")[:3000],
                         "page_number": item.get("page_id"),
+                        "chunk_index": item.get("chunk_index"),
                         "score": 0.9,
                         "metadata": item.get("metadata"),
                     })
-                new_count = len(results) - fts5_before
-                chat_log.search_result("FTS5", len(kw_results), new_count)
-                print(f"[SEARCH] Keywords contributed {new_count} new results")
+                chat_log.search_result("FTS5", len(kw_results), len(fts5_res))
+                print(f"[SEARCH] FTS5 contributed {len(fts5_res)} results")
             else:
                 chat_log.search_result("FTS5", 0, 0, "no results")
-                print(f"[SEARCH] FTS5 returned nothing")
+            per_strategy.append(fts5_res)
         except Exception as e:
             chat_log.search_result("FTS5", 0, 0, f"error: {e}")
-            pass
+            per_strategy.append([])
 
-        # 3. Per-word LIKE search (typo-tolerant partial matching)
-        like_before = len(results)
+        # ──── 3. Per-word LIKE search ────
         chat_log.search_strategy("Per-word LIKE Search (typo-tolerant)", f"{len(query_words)} words: {query_words[:5]}")
+        like_res = []
         try:
-            like_results = set()
+            like_ids = set()
             seen_like = set()
-            word_hits = {}
             for word in query_words:
                 wr = SupabaseDB.select(
                     "document_chunks",
-                    columns="id, document_id, organization_id, page_id, content, metadata",
+                    columns="id, document_id, organization_id, page_id, chunk_index, content, metadata",
                     like={"content": word},
                     limit=limit,
                 )
                 wdata = getattr(wr, "data", wr if isinstance(wr, list) else [])
                 if isinstance(wdata, list):
-                    word_hits[word] = len(wdata)
                     for item in wdata:
                         if isinstance(item, dict) and item.get("id") not in seen_like:
                             seen_like.add(item.get("id"))
-                            like_results.add(item.get("id"))
-            if like_results:
+                            like_ids.add(item.get("id"))
+            if like_ids:
                 all_like = SupabaseDB.select(
                     "document_chunks",
-                    columns="id, document_id, organization_id, page_id, content, metadata",
+                    columns="id, document_id, organization_id, page_id, chunk_index, content, metadata",
                     filters={"organization_id": organization_id} if organization_id else None,
                     limit=limit * 3,
                 )
                 ldata = getattr(all_like, "data", all_like if isinstance(all_like, list) else [])
                 if isinstance(ldata, list):
-                    doc_ids = list(set(r.get("document_id", "") for r in ldata if isinstance(r, dict) and r.get("id") in like_results))
+                    doc_ids = list(set(r.get("document_id", "") for r in ldata if isinstance(r, dict) and r.get("id") in like_ids))
                     title_map = self._fetch_doc_titles(doc_ids, organization_id)
                     for item in ldata:
-                        if not isinstance(item, dict) or item.get("id") not in like_results:
+                        if not isinstance(item, dict) or item.get("id") not in like_ids:
                             continue
-                        chunk_id = item.get("id")
-                        if chunk_id in seen_ids:
-                            continue
-                        seen_ids.add(chunk_id)
                         did = item.get("document_id", "")
                         title, dtype, p3a = title_map.get(did, ("", "", ""))
                         if document_type and dtype != document_type:
                             continue
-                        results.append({
+                        like_res.append({
                             "document_id": did,
                             "document_title": title,
                             "document_type": dtype,
                             "phase3_agent": p3a,
                             "chunk_text": item.get("content", "")[:3000],
                             "page_number": item.get("page_id"),
+                            "chunk_index": item.get("chunk_index"),
                             "score": 0.7,
                             "metadata": item.get("metadata"),
                         })
-                new_count = len(results) - like_before
-                word_breakdown = ", ".join(f"{w}={h}" for w, h in word_hits.items() if h > 0)
-                chat_log.search_result("LIKE", len(like_results), new_count, word_breakdown)
+                chat_log.search_result("LIKE", len(like_ids), len(like_res))
             else:
                 chat_log.search_result("LIKE", 0, 0, "no matches")
         except Exception as e:
             chat_log.search_result("LIKE", 0, 0, f"error: {e}")
-            pass
+        per_strategy.append(like_res)
 
-        # 4. Supabase vector search (handles typos via embeddings)
-        sqs_before = len(results)
+        # ──── 4. Supabase vector search ────
         chat_log.search_strategy("Supabase Vector Search", f"threshold=0.5, top_k={limit * 2}")
+        sqs_res = []
         try:
             vector_results = SupabaseDB.search_vector(
                 "document_chunks",
@@ -934,31 +1032,35 @@ class RAGService:
         except Exception:
             vector_results = {"data": []}
             vector_count = 0
-
         vec_doc_ids = list(set(chunk.get("document_id", "") for chunk in (getattr(vector_results, "data", vector_results if isinstance(vector_results, list) else []) if isinstance(vector_results, (list, dict)) else [])))
         vec_title_map = self._fetch_doc_titles(vec_doc_ids, organization_id) if vec_doc_ids else {}
         for item in getattr(vector_results, "data", vector_results if isinstance(vector_results, list) else []):
             chunk = item if isinstance(item, dict) else {}
-            chunk_id = chunk.get("id", "")
-            if chunk_id in seen_ids:
-                continue
-            seen_ids.add(chunk_id)
             if document_type and chunk.get("document_type") != document_type:
                 continue
             did = chunk.get("document_id", "")
             title, dtype, p3a = vec_title_map.get(did, ("", "", ""))
-            results.append({
+            sqs_res.append({
                 "document_id": did,
                 "document_title": title or chunk.get("document_title", ""),
                 "document_type": dtype or chunk.get("document_type"),
                 "phase3_agent": p3a,
                 "chunk_text": chunk.get("content", chunk.get("chunk_text", "")),
                 "page_number": chunk.get("page_number", chunk.get("page_id")),
+                "chunk_index": chunk.get("chunk_index"),
                 "score": chunk.get("similarity", chunk.get("score", 0)),
                 "metadata": chunk.get("metadata"),
             })
-        new_count = len(results) - sqs_before
-        chat_log.search_result("Supabase Vector", vector_count, new_count)
+        chat_log.search_result("Supabase Vector", vector_count, len(sqs_res))
+        per_strategy.append(sqs_res)
+
+        # ──── RRF Fusion ────
+        filtered_strategies = [s for s in per_strategy if s]
+        if filtered_strategies:
+            results = self._rrf_fuse(filtered_strategies, k=60)
+        else:
+            results = []
+        chat_log.info(f"RRF fused {len(filtered_strategies)} strategies → {len(results)} unique chunks")
 
         # Attach cv_score to resume search results
         cv_doc_ids = list(set(r["document_id"] for r in results if r.get("document_type") == "resume"))
@@ -966,12 +1068,15 @@ class RAGService:
         for r in results:
             r["cv_score"] = cv_scores.get(r["document_id"])
 
-        results = sorted(results, key=lambda x: x["score"], reverse=True)
         if document_ids:
             doc_set = set(document_ids)
             results = [r for r in results if r["document_id"] in doc_set]
+
+        # Neighbor chunks for context
+        results = self._fetch_neighbor_chunks(results[:limit * 2], organization_id)
+
         final = results[offset:offset + limit]
-        chat_log.info(f"Total after sort+filter: {len(final)} chunks (from {len(results)} unique, {len(seen_ids)} total seen)")
+        chat_log.info(f"Total after RRF+filter: {len(final)} chunks (from {len(results)} unique)")
         top_scores = [f"{r['document_title'][:30]}: {r['score']:.3f}" for r in final[:3]]
         if top_scores:
             chat_log.info(f"Top results: {', '.join(top_scores)}")
