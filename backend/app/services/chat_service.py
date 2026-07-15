@@ -12,6 +12,11 @@ _RESUME_KEYWORDS = ["resume", "cv ", "candidate", "applicant", "hiring", "recrui
                     "give me.*top", "list.*resume", "show.*candidate", "list.*candidate",
                     "top.*resume", "recommend.*candidate", "best.*fit"]
 
+_AGGREGATE_KEYWORDS = [r"\bsum\b", r"\btotal\b", r"\baggregate\b", r"\bcombine\b",
+                       r"\boverall\b", r"\bgrand total\b", r"\ball\b.*\btotal\b",
+                       r"\btotal\b.*\ball\b", r"\badd up\b", r"\bsum up\b",
+                       r"\baccumulated\b", r"\bcombined\b", r"\btogether\b"]
+
 
 class ChatService:
     def _get_or_create_session(self, session_id: str, organization_id: str, document_ids: list = None) -> tuple[str, list, bool]:
@@ -43,6 +48,84 @@ class ChatService:
         SupabaseDB.save_chat_message(session_id, "assistant", answer, sources)
         if is_first:
             self._auto_title(session_id, question)
+
+    def _fetch_extraction_summary(self, document_ids: list, organization_id: str) -> str:
+        if not document_ids:
+            return ""
+        try:
+            import json
+            from ..database import _get_supabase, _use_supabase, _local_select_in
+            unique_ids = list(set(document_ids))
+            client = _get_supabase()
+            if _use_supabase and client:
+                r = client.table("document_extractions") \
+                    .select("document_id, extraction_type, extracted_data, confidence") \
+                    .in_("document_id", unique_ids) \
+                    .eq("organization_id", organization_id) \
+                    .execute()
+                rows = getattr(r, "data", [])
+            else:
+                rows = _local_select_in("document_extractions",
+                    columns="document_id, extraction_type, extracted_data, confidence",
+                    filters={"organization_id": organization_id},
+                    in_column="document_id", in_values=unique_ids)
+            if not rows:
+                return ""
+
+            doc_info = {}
+            try:
+                title_result = SupabaseDB.select("documents",
+                    columns="id, title",
+                    filters={"organization_id": organization_id},
+                )
+                title_data = getattr(title_result, "data", title_result if isinstance(title_result, list) else [])
+                for row in title_data:
+                    doc_info[row["id"]] = row.get("title", "")
+            except Exception:
+                pass
+
+            lines = ["[Structured Document Data for Aggregation]"]
+            totals = {}
+            parsed_count = 0
+
+            for row in rows:
+                did = row.get("document_id", "")
+                raw = row.get("extracted_data", "{}")
+                if isinstance(raw, str):
+                    try:
+                        parsed = json.loads(raw)
+                    except Exception:
+                        continue
+                else:
+                    parsed = raw or {}
+                if not isinstance(parsed, dict):
+                    continue
+
+                title = doc_info.get(did, did)
+                lines.append(f"\n  Document: {title}  (id: {did})")
+                lines.append(f"  Type: {row.get('extraction_type', 'document')}")
+
+                for key, val in parsed.items():
+                    if key.startswith("_"):
+                        continue
+                    if isinstance(val, str) and val:
+                        lines.append(f"    {key}: {val}")
+                    elif isinstance(val, (int, float)):
+                        lines.append(f"    {key}: {val}")
+                        totals[key] = totals.get(key, 0) + val
+                parsed_count += 1
+
+            if parsed_count > 1 and totals:
+                lines.append("\n  --- Aggregated Totals ---")
+                for key, val in sorted(totals.items()):
+                    lines.append(f"    Sum of {key}: {val}")
+
+            result = "\n".join(lines)
+            return result
+        except Exception as e:
+            chat_log = get_chat_logger()
+            chat_log.warn(f"Extraction summary error: {e}")
+            return ""
 
     def chat_with_document(self, question: str, document_ids: list, organization_id: str,
                            document_type: str = None, phase3_agent: str = None,
@@ -188,6 +271,16 @@ class ChatService:
                 resume_block = "\n".join(lines)
                 context = resume_block + "\n\n" + context if context else resume_block
                 chat_log.info(f"Injected {len(resumes)} resume scores into context")
+
+        # ── Structured extraction summary for aggregate/multi-doc queries ──
+        is_aggregate_query = any(
+            __import__("re").search(kw, q_lower) for kw in _AGGREGATE_KEYWORDS
+        )
+        if is_aggregate_query and resolved_ids:
+            extraction_summary = self._fetch_extraction_summary(resolved_ids, organization_id)
+            if extraction_summary:
+                context = extraction_summary + "\n\n" + context if context else extraction_summary
+                chat_log.info(f"Injected structured extraction summary for {len(resolved_ids)} documents")
 
         chat_log.search_strategy("Context Building", f"{len(search_results)} chunks → {context_len} chars")
         doc_types_seen = {}
