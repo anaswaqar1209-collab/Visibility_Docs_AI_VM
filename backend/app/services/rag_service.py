@@ -11,17 +11,35 @@ _CHAPTER_RE = None
 
 
 def _get_patterns():
-    global _NUMERED_RE, _CHAPTER_RE
+    global _NUMBERED_RE, _CHAPTER_RE
     if _NUMERED_RE is None:
         import re
-        _NUMERED_RE = re.compile(r'^\d+(?:\.\d+)*(?:\s+|\.\s+)(.+)')
+        _NUMBERED_RE = re.compile(r'^\d+(?:\.\d+)*(?:\s+|\.\s+)(.+)')
         _CHAPTER_RE = re.compile(r'^(?:chapter|section|appendix|part|article)\s+\d+', re.IGNORECASE)
-    return _NUMERED_RE, _CHAPTER_RE
+    return _NUMBERED_RE, _CHAPTER_RE
+
+
+# Field-label detection: lines like "Suggestive Language:", "Required Language:",
+# "Example:", "Note:", "Background:" etc. that act as sub-headings inside a section.
+_LABEL_COLON_RE = None
+_TITLECASE_RE = None
+
+
+def _get_label_patterns():
+    global _LABEL_COLON_RE, _TITLECASE_RE
+    if _LABEL_COLON_RE is None:
+        import re
+        # Short label ending with a colon, starts with a capital letter
+        _LABEL_COLON_RE = re.compile(r'^([A-Z][A-Za-z0-9\s\'"\-&/()]{1,79}):\s*$')
+        # Title-Case short label (e.g. "Suggestive Language") without trailing punctuation
+        _TITLECASE_RE = re.compile(r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,7})$')
+    return _LABEL_COLON_RE, _TITLECASE_RE
 
 
 def _detect_headings_from_file(file_path: str) -> list[dict]:
     import fitz
     numbered_re, chapter_re = _get_patterns()
+    label_colon_re, _ = _get_label_patterns()
 
     doc = fitz.open(file_path)
     page_height = doc[0].rect.height if doc.page_count > 0 else 842
@@ -80,6 +98,11 @@ def _detect_headings_from_file(file_path: str) -> list[dict]:
             if chapter_re.match(txt):
                 is_heading = True
                 level = 1
+            m_label = label_colon_re.match(txt)
+            if m_label:
+                is_heading = True
+                level = 3
+                txt = m_label.group(1).strip()
             if txt.isupper() and len(txt) > 3 and len(txt) < 60 and not is_bold:
                 is_heading = True
                 level = min(level, 2) if level else 2
@@ -112,6 +135,7 @@ def _detect_headings_from_file(file_path: str) -> list[dict]:
 
 def _detect_headings_from_text(text: str) -> list[dict]:
     numbered_re, chapter_re = _get_patterns()
+    label_colon_re, titlecase_re = _get_label_patterns()
     headings = []
     lines = text.split("\n")
     body_sizes = [len(l.split()) for l in lines if l.strip()]
@@ -131,6 +155,12 @@ def _detect_headings_from_text(text: str) -> list[dict]:
                 headings.append({"heading": stripped, "level": 3})
         elif chapter_re.match(stripped):
             headings.append({"heading": stripped, "level": 1})
+        elif label_colon_re.match(stripped):
+            m = label_colon_re.match(stripped)
+            headings.append({"heading": m.group(1).strip(), "level": 3})
+        elif titlecase_re.match(stripped) and len(stripped) <= 60 and len(stripped.split()) >= 2:
+            # Title-Case short label without colon (e.g. "Suggestive Language")
+            headings.append({"heading": stripped, "level": 3})
         elif stripped.isupper() and len(stripped) > 3 and len(stripped) < 80:
             word_count = len(stripped.split())
             if word_count < avg_line_words * 0.7:
@@ -193,10 +223,9 @@ def _build_sections(text: str, headings: list[dict]) -> list[dict]:
                 buffer = None
             merged.append(sec)
     if buffer:
-        if merged:
-            merged[-1]["content"] += "\n" + buffer["content"]
-        else:
-            merged.append(buffer)
+        # Keep trailing tiny section as its own chunk (don't merge into previous
+        # section) so field labels like "Required Language" stay retrievable.
+        merged.append(buffer)
     return merged
 
 
@@ -853,7 +882,7 @@ class RAGService:
             key = c["document_id"] + "::" + str(c.get("chunk_index", ""))
             if key in neighbor_texts and neighbor_texts[key]:
                 nt = neighbor_texts[key][0]
-                if nt != c.get("chunk_text", ""):
+                if nt and nt != c.get("chunk_text", ""):
                     c["chunk_text"] = nt
         return chunks
 
@@ -1020,7 +1049,13 @@ class RAGService:
                     "embedding": embedding,
                     "model_name": "all-MiniLM-L6-v2",
                 })
-            SupabaseDB.batch_insert("document_chunks", chunk_records)
+            # Insert chunks first to get their IDs for chunk_id in embeddings
+            inserted = SupabaseDB.batch_insert("document_chunks", chunk_records)
+            if inserted:
+                for i, rec in enumerate(inserted):
+                    rid = rec.get("id") if isinstance(rec, dict) else None
+                    if rid is not None and i < len(emb_records):
+                        emb_records[i]["chunk_id"] = rid
             SupabaseDB.batch_insert("document_embeddings", emb_records)
             print(f"[INDEX] Saved {len(chunk_records)} chunks + {len(emb_records)} embeddings to DB")
         except Exception as e:
@@ -1410,13 +1445,13 @@ class RAGService:
         per_strategy.append(like_res)
 
         # ──── 4. Supabase vector search ────
-        chat_log.search_strategy("Supabase Vector Search", f"threshold=0.5, top_k={limit * 2}")
+        chat_log.search_strategy("Supabase Vector Search", f"threshold=0.3, top_k={limit * 2}")
         sqs_res = []
         try:
             vector_results = SupabaseDB.search_vector(
                 "document_chunks",
                 query_embedding,
-                match_threshold=0.5,
+                match_threshold=0.3,
                 match_count=limit * 2,
                 filter_org_id=organization_id,
             )

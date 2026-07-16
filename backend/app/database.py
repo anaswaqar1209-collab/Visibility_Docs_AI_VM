@@ -308,14 +308,23 @@ class SupabaseDB:
         return _local_select(table, columns, filters, like, limit, offset)
 
     @staticmethod
-    def batch_insert(table: str, records: list[dict]):
+    def batch_insert(table: str, records: list[dict]) -> list[dict]:
+        supabase_data = []
         try:
             client = _get_supabase()
             if _use_supabase and client:
-                client.table(table).insert(records).execute()
-        except Exception:
-            pass
-        _local_batch_insert(table, records)
+                res = client.table(table).insert(records).execute()
+                if hasattr(res, 'error') and res.error:
+                    print(f"[DB] batch_insert {table} error: {res.error}")
+                else:
+                    supabase_data = getattr(res, "data", []) or []
+        except Exception as e:
+            print(f"[DB] batch_insert {table} exception: {e}")
+        local_ids = _local_batch_insert(table, records)
+        # Fall back to local IDs if Supabase returned no data
+        if not supabase_data and local_ids:
+            supabase_data = [{"id": rid} for rid in local_ids]
+        return supabase_data
 
     @staticmethod
     def upload_file(bucket: str, path: str, file_data: bytes, content_type: str = None):
@@ -671,17 +680,25 @@ def _local_select(table: str, columns: str = "*", filters: dict = None, like: di
     return type("Result", (), {"data": [dict(r) for r in rows]})()
 
 
-def _local_batch_insert(table: str, records: list[dict]):
+def _local_batch_insert(table: str, records: list[dict]) -> list[int]:
     conn = _get_local_db()
+    ids = []
     if table == "document_chunks":
         doc_ids = set()
-        conn.executemany(
+        cursor = conn.executemany(
             "INSERT INTO document_chunks (organization_id, document_id, page_id, chunk_type, heading, section, section_number, machine_id, filename, content, chunk_text, chunk_index, metadata) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(r.get("organization_id", ""), r.get("document_id", ""), r.get("page_id"),
               r.get("chunk_type", "paragraph"), r.get("heading"),
               r.get("section"), r.get("section_number"), r.get("machine_id"), r.get("filename"),
               r.get("content", ""), r.get("chunk_text") or r.get("content", ""),
               r.get("chunk_index", 0), __import__("json").dumps(r.get("metadata")) if r.get("metadata") else None) for r in records])
+        # Get lastrowid for each inserted record (they are sequential)
+        try:
+            last_id = cursor.lastrowid
+            if last_id:
+                ids = list(range(last_id - len(records) + 1, last_id + 1))
+        except Exception:
+            pass
         for r in records:
             if r.get("document_id"):
                 doc_ids.add(r["document_id"])
@@ -694,6 +711,7 @@ def _local_batch_insert(table: str, records: list[dict]):
             [(r.get("organization_id", ""), r.get("document_id", ""), r.get("chunk_id"),
               str(r.get("embedding", [])), r.get("model_name", "all-MiniLM-L6-v2")) for r in records])
         conn.commit()
+    return ids
 
 
 def _local_select_in(table: str, columns: str = "*", filters: dict = None, in_column: str = None, in_values: list = None):

@@ -395,4 +395,68 @@ async def classify_text(request: ClassifyTextRequest = Body(...)):
     return result
 
 
+@router.post(
+    "/reindex-all",
+    summary="Re-index all documents with current RAG logic",
+    description="Delete existing chunks/embeddings and re-index every document using the latest heading detection and chunking.",
+)
+async def reindex_all():
+    from ..services.rag_service import rag_service as rag
+    from ..database import _get_supabase
+    from ..services.pinecone_service import pinecone_service
+
+    print("\n" + "="*70)
+    print("[REINDEX] Starting full re-index of all documents...")
+    print("="*70)
+
+    client = _get_supabase()
+    if not client:
+        raise HTTPException(status_code=500, detail="Supabase client unavailable")
+    res = client.table("documents").select(
+        "id, organization_id, raw_text, document_type, status"
+    ).execute()
+    docs = getattr(res, "data", []) or []
+    print(f"[REINDEX] Found {len(docs)} documents in DB")
+
+    results = {"total": len(docs), "reindexed": 0, "skipped": 0, "errors": []}
+
+    for d in docs:
+        doc_id = d.get("id")
+        org_id = d.get("organization_id")
+        raw_text = d.get("raw_text") or ""
+        doc_type = d.get("document_type")
+        if not doc_id or not org_id or not raw_text.strip():
+            results["skipped"] += 1
+            print(f"[REINDEX] SKIP doc={doc_id} (no org/raw_text)")
+            continue
+
+        print(f"\n[REINDEX] ({results['reindexed'] + 1}/{len(docs)}) doc={doc_id[:12]} type={doc_type} chars={len(raw_text)}")
+
+        try:
+            # Delete old chunks
+            if pinecone_service.available:
+                try:
+                    pinecone_service.delete_by_document(doc_id, namespace=org_id)
+                except Exception as e:
+                    print(f"  [WARN] Pinecone delete: {e}")
+            client.table("document_chunks").delete().eq("document_id", doc_id).execute()
+            client.table("document_embeddings").delete().eq("document_id", doc_id).execute()
+
+            # Re-index with current logic
+            rag.index_document(
+                doc_id, org_id, raw_text, None,
+                document_type=doc_type,
+            )
+            results["reindexed"] += 1
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(f"  [ERROR] {e}\n{tb}")
+            results["errors"].append({"doc_id": doc_id, "error": str(e)})
+            results["skipped"] += 1
+
+    print(f"\n[REINDEX] DONE: {results['reindexed']} reindexed, {results['skipped']} skipped, {len(results['errors'])} errors")
+    return results
+
+
 
