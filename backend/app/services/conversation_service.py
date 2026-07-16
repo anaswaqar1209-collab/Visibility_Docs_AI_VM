@@ -57,13 +57,13 @@ class ConversationService:
             prompt = ChatPromptTemplate.from_messages([
                 ("system", sp),
                 MessagesPlaceholder(variable_name="history"),
-                ("human", "Document Context:\n{context}\n\nQuestion: {question}"),
+                ("human", "{agent_instructions}Document Context:\n{context}\n\nQuestion: {question}"),
             ])
         else:
             prompt = ChatPromptTemplate.from_messages([
                 ("system", AGENT_SYSTEM_PROMPT),
                 MessagesPlaceholder(variable_name="history"),
-                ("human", "Agent Instructions:\n{agent_instructions}\n\nDocument Context:\n{context}\n\nQuestion: {question}"),
+                ("human", "{agent_instructions}Document Context:\n{context}\n\nQuestion: {question}"),
             ])
 
         self._chain = prompt | self.llm
@@ -128,10 +128,10 @@ class ConversationService:
 
         if system_prompt and "{" in system_prompt:
             # Agent prompt has {text}/{filename} — pass as agent_instructions instead
-            chain_inputs["agent_instructions"] = system_prompt
-            chain_inputs["context"] = context
+            chain_inputs["agent_instructions"] = "Agent Instructions:\n" + system_prompt + "\n\n"
         else:
-            chain_inputs["context"] = context
+            chain_inputs["agent_instructions"] = ""
+        chain_inputs["context"] = context
 
         if is_followup and not context:
             context = self.get_last_context(session_id)
