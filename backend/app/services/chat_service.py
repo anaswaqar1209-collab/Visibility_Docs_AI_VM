@@ -675,6 +675,15 @@ class ChatService:
                     "6. If the context has tables or diagrams, explain what they show.\n"
                     f"{resume_rank_instruction}"
                 )
+        # ── Common instruction: cite document sources in the answer ──
+        qa_prompt += (
+            "\n9. When you provide extracted values or information, ALWAYS mention "
+            "which document they came from using the document name shown in brackets "
+            "[Document: ...] in the context.\n"
+            "   Example: 'Invoice-001: 0300-1234567, Resume-John: 042-1112233'\n"
+            "   Never just list values without saying which file they belong to."
+        )
+
         chat_log.info(f"Built Q&A prompt for agent: {dominant_agent} ({len(qa_prompt)} chars)")
 
         chat_log.llm_call("llama-3.3-70b-versatile", context_len, len(question), len(sources))
