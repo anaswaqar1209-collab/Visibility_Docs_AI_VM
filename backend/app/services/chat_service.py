@@ -252,6 +252,46 @@ class ChatService:
                 best_field = field
         return best_field if best_score >= 2 else None
 
+    def _is_ambiguous(self, query: str) -> bool:
+        """Heuristic check: is the user's question too vague to answer directly?
+        Ambiguous queries (e.g. 'data do', 'ye file mein kya hai') benefit from
+        counter-questions; specific queries ('invoice total kitna hai') do not."""
+        q = (query or "").lower().strip()
+        if not q:
+            return True
+        words = [w for w in re.split(r"[^a-z0-9\u0600-\u06ff]+", q) if w]
+        if len(words) <= 2:
+            return True
+        # Generic / filler words that carry no specific intent
+        generic = {
+            "data", "do", "day", "dijiye", "de", "dein", "den", "batao", "bataye",
+            "dikhaiye", "dikhao", "file", "files", "document", "documents", "info",
+            "information", "kya", "kyaa", "what", "show", "show me", "give", "get",
+            "this", "that", "these", "those", "ye", "wo", "woh", "in", "the", "a",
+            "an", "some", "all", "sab", "saare", "sari", "har", "kuch", "koi",
+            "mere", "meri", "apna", "contents", "content", "details", "detail",
+            "summary", "bataye", "hai", "hain", "ka", "ki", "ke", "ko", "se",
+            "par", "aur", "bhi", "to", "is", "us", "kay", "ky", "ne", "pe",
+            "say", "laa", "kr", "kar", "mein", "main", "mai", "k", "of", "for",
+            "on", "at", "with", "from", "by", "as", "i", "you", "we", "they",
+            "it", "me", "my", "your", "our", "their",
+        }
+        specific = {
+            "invoice", "resume", "cv", "contract", "rfq", "quotation", "quote",
+            "po", "purchase", "agreement", "phone", "number", "numbers", "email",
+            "amount", "total", "date", "name", "names", "price", "tax", "vendor",
+            "customer", "employee", "candidate", "skill", "skills", "education",
+            "experience", "salary", "payment", "due", "gst", "vat",
+        }
+        has_specific = any(w in specific for w in words)
+        non_generic = [w for w in words if w not in generic]
+        # Ambiguous if: no specific entity word AND mostly filler words
+        if not has_specific and len(non_generic) == 0:
+            return True
+        if not has_specific and len(non_generic) <= 1:
+            return True
+        return False
+
     def _filename_from_url(self, url: str) -> str:
         """Extract filename from a URL/path like 'path/to/file.pdf' → 'file.pdf'."""
         if not url:
@@ -713,12 +753,16 @@ class ChatService:
             "which document they came from using the document name shown in brackets "
             "[Document: ...] in the context.\n"
             "   Example: 'Invoice-001: 0300-1234567, Resume-John: 042-1112233'\n"
-            "   Never just list values without saying which file they belong to.\n"
-            "10. At the end of your answer, ALWAYS suggest 2-3 relevant counter "
-            "questions the user might ask next.  Put them under a '---' separator "
-            "or label them as 'Counter Questions:'.  Make sure they are specific "
-            "to the documents discussed, not generic."
+            "   Never just list values without saying which file they belong to."
         )
+        # Only add counter-questions when the user's query is ambiguous/unclear.
+        if self._is_ambiguous(question):
+            qa_prompt += (
+                "\n10. The user's question is vague or ambiguous. At the end of your "
+                "answer, suggest 2-3 relevant counter-questions that would help clarify "
+                "what they want.  Put them under a '---' separator or label them "
+                "'Counter Questions:'.  Make them specific to the documents discussed."
+            )
 
         chat_log.info(f"Built Q&A prompt for agent: {dominant_agent} ({len(qa_prompt)} chars)")
 
