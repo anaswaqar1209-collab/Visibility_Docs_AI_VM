@@ -267,10 +267,10 @@ class ChatService:
             matches = cfg["regex"].findall(text)
             if matches:
                 found_any = True
-                vals = "; ".join(set(m.strip() for m in matches[:5]))
-                lines.append(f"  {title}: {vals}")
+                vals = ", ".join(set(m.strip() for m in matches[:3]))
+                lines.append(f"  [Document: {title}]: {vals}")
             else:
-                lines.append(f"  {title}: (none found)")
+                lines.append(f"  [Document: {title}]: (none found)")
         if not found_any:
             # No regex matches – fall back to showing raw text snippets from each doc
             lines = [f"[{cfg['label']} - raw snippets from each document]"]
@@ -278,9 +278,9 @@ class ChatService:
                 text = r.get("chunk_text", "")[:200].strip()
                 title = r.get("document_title", f"Document {i+1}")
                 if text:
-                    lines.append(f"  {title}: {text}")
+                    lines.append(f"  [Document: {title}]: {text}")
                 else:
-                    lines.append(f"  {title}: (empty)")
+                    lines.append(f"  [Document: {title}]: (empty)")
         return "\n".join(lines)
 
     def chat_with_document(self, question: str, document_ids: list, organization_id: str,

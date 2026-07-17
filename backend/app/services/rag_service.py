@@ -1746,9 +1746,12 @@ class RAGService:
             return []
 
     def _fetch_any_chunks(self, document_ids: list[str], org_id: str, limit_per_doc: int = 1) -> list[dict]:
-        """Fast fallback: grab the first chunk(s) from each doc via direct DB query."""
+        """Fast fallback: grab the first chunk(s) from each doc via direct DB query,
+        with proper document titles."""
         if not document_ids:
             return []
+        # Batch-fetch document titles
+        title_map = self._fetch_doc_titles(document_ids, org_id)
         results = []
         try:
             for did in document_ids:
@@ -1761,10 +1764,12 @@ class RAGService:
                 if isinstance(data, list):
                     for row in data[:limit_per_doc]:
                         if isinstance(row, dict):
+                            raw_title, dtype, _ = title_map.get(did, ("", "", ""))
+                            title = raw_title or did  # fallback to ID only if title is truly empty
                             results.append({
                                 "document_id": row.get("document_id", did),
-                                "document_title": did,
-                                "document_type": "",
+                                "document_title": title,
+                                "document_type": dtype,
                                 "chunk_text": row.get("content", ""),
                                 "page_number": row.get("page_id", ""),
                                 "score": 0.0,
