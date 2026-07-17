@@ -714,9 +714,9 @@ class ChatService:
             "[Document: ...] in the context.\n"
             "   Example: 'Invoice-001: 0300-1234567, Resume-John: 042-1112233'\n"
             "   Never just list values without saying which file they belong to.\n"
-            "10. At the end of your answer, ALWAYS suggest 2-3 relevant follow-up "
+            "10. At the end of your answer, ALWAYS suggest 2-3 relevant counter "
             "questions the user might ask next.  Put them under a '---' separator "
-            "or label them as 'Suggested Questions:'.  Make sure they are specific "
+            "or label them as 'Counter Questions:'.  Make sure they are specific "
             "to the documents discussed, not generic."
         )
 
