@@ -119,6 +119,7 @@ class ChatMessageResponse(BaseModel):
 class ChatSessionResponse(BaseModel):
     id: str
     organization_id: str
+    user_id: Optional[str] = None
     document_ids: list[str] = []
     title: str
     created_at: Optional[str] = None
@@ -134,6 +135,7 @@ class ChatSessionListResponse(BaseModel):
 class ChatRequest(BaseModel):
     document_id: str = ""
     organization_id: str
+    user_id: Optional[str] = None
     question: str
     document_ids: Optional[list[str]] = None
     document_type: Optional[str] = None

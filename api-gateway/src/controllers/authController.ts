@@ -6,6 +6,7 @@ import openRemoteService from '../services/openRemoteService';
 import { generateRefreshToken, generateToken, verifyRefreshToken } from '../utils/jwt';
 import logger from '../utils/logger';
 import { normalizeTeamPermissions } from '../utils/permissionsUtil';
+import { recordActivityAnon } from '../services/activityLog';
 
 function userPermissionsForResponse(user: { role: string; permissions?: unknown }) {
     if (user.role === 'team') {
@@ -272,6 +273,17 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
 
         const match = await bcrypt.compare(password, user.passwordHash);
         if (!match) {
+            recordActivityAnon(req, {
+                actorUserId: user.userId,
+                actorRole: user.role,
+                actorEmail: user.email,
+                actorName: user.fullName,
+                organizationId: user.organizationId ?? null,
+                action: 'auth.login',
+                category: 'auth',
+                outcome: 'failure',
+                message: `Failed login for ${user.email}`,
+            });
             return res.status(401).json({
                 success: false,
                 message: 'Invalid username/email or password',
@@ -303,6 +315,18 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
             realm: user.openRemoteRealm ?? null,
             openRemoteUserId: user.openRemoteUserId ?? null,
         };
+
+        recordActivityAnon(req, {
+            actorUserId: user.userId,
+            actorRole: user.role,
+            actorEmail: user.email,
+            actorName: user.fullName,
+            organizationId: user.organizationId ?? null,
+            action: 'auth.login',
+            category: 'auth',
+            outcome: 'success',
+            message: `${user.fullName || user.email} signed in`,
+        });
 
         res.status(200).json({
             success: true,

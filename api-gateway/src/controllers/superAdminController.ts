@@ -7,6 +7,7 @@ import {
     getDuplicateDocumentIds,
     getDuplicateGroupSizes,
 } from '../services/duplicateDetection';
+import { recordActivityFromReq } from '../services/activityLog';
 
 export const listAdmins = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -14,7 +15,58 @@ export const listAdmins = async (req: Request, res: Response, next: NextFunction
             .select('-passwordHash -openRemoteSecret')
             .sort({ createdAt: -1 })
             .lean();
-        res.json({ success: true, data: { admins } });
+
+        const orgIds = [
+            ...new Set(admins.map((a) => a.organizationId).filter(Boolean) as string[]),
+        ];
+
+        const [orgs, teamMembers] = await Promise.all([
+            orgIds.length
+                ? Organization.find({ organizationId: { $in: orgIds } }).lean()
+                : Promise.resolve([]),
+            orgIds.length
+                ? User.find({
+                      role: 'team',
+                      organizationId: { $in: orgIds },
+                  })
+                      .select('-passwordHash -openRemoteSecret')
+                      .sort({ fullName: 1 })
+                      .lean()
+                : Promise.resolve([]),
+        ]);
+
+        const orgMap = new Map(orgs.map((o) => [o.organizationId, o]));
+        const membersByOrg = new Map<string, typeof teamMembers>();
+        for (const m of teamMembers) {
+            const key = m.organizationId || '';
+            if (!key) continue;
+            const list = membersByOrg.get(key) || [];
+            list.push(m);
+            membersByOrg.set(key, list);
+        }
+
+        const enriched = admins.map((admin) => {
+            const org = admin.organizationId ? orgMap.get(admin.organizationId) : null;
+            const members = admin.organizationId
+                ? membersByOrg.get(admin.organizationId) || []
+                : [];
+            return {
+                ...admin,
+                organization: org
+                    ? {
+                          organizationId: org.organizationId,
+                          organizationName: org.organizationName,
+                          status: org.status,
+                          subscriptionPlan: org.subscriptionPlan,
+                          contactEmail: org.contactEmail,
+                      }
+                    : null,
+                teamMembers: members,
+                teamMemberCount: members.length,
+            };
+        });
+
+        res.json({ success: true, data: { admins: enriched } });
     } catch (error) {
         next(error);
     }
@@ -35,6 +87,14 @@ export const updateAdminStatus = async (req: Request, res: Response, next: NextF
             { new: true }
         ).select('-passwordHash -openRemoteSecret');
         if (!admin) return res.status(404).json({ success: false, message: 'Admin not found' });
+        recordActivityFromReq(req, {
+            action: 'admin.status',
+            category: 'admin',
+            resourceType: 'user',
+            resourceId: admin.userId,
+            message: `Set admin ${admin.email} status to ${status}`,
+            metadata: { status },
+        });
         res.json({ success: true, data: { admin } });
     } catch (error) {
         next(error);
@@ -69,6 +129,13 @@ export const deleteAdmin = async (req: Request, res: Response, next: NextFunctio
         }
         const result = await User.deleteOne({ userId: req.params.userId, role: 'admin' });
         if (!result.deletedCount) return res.status(404).json({ success: false, message: 'Admin not found' });
+        recordActivityFromReq(req, {
+            action: 'admin.delete',
+            category: 'admin',
+            resourceType: 'user',
+            resourceId: String(req.params.userId),
+            message: `Deleted admin ${req.params.userId}`,
+        });
         res.json({ success: true, message: 'Admin deleted' });
     } catch (error) {
         next(error);

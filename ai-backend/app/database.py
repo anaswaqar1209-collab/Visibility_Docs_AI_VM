@@ -172,12 +172,14 @@ def _init_local_db(conn):
         CREATE TABLE IF NOT EXISTS chat_sessions (
             id TEXT PRIMARY KEY,
             organization_id TEXT NOT NULL,
+            user_id TEXT,
             document_ids TEXT DEFAULT '[]',
             title TEXT NOT NULL DEFAULT 'New Chat',
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_chat_sessions_org ON chat_sessions(organization_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
         CREATE TABLE IF NOT EXISTS chat_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
@@ -219,6 +221,14 @@ def _init_local_db(conn):
         pass
     try:
         conn.execute("ALTER TABLE documents ADD COLUMN phase3_agent TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE chat_sessions ADD COLUMN user_id TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id)")
     except Exception:
         pass
 
@@ -343,7 +353,12 @@ class SupabaseDB:
         return _local_search_vector(query_vector, match_threshold, match_count, filter_org_id)
 
     @staticmethod
-    def create_chat_session(organization_id: str, title: str = "New Chat", document_ids: list = None) -> str:
+    def create_chat_session(
+        organization_id: str,
+        title: str = "New Chat",
+        document_ids: list = None,
+        user_id: str = None,
+    ) -> str:
         import uuid
         session_id = uuid.uuid4().hex
         doc_list = document_ids or []
@@ -352,24 +367,44 @@ class SupabaseDB:
         try:
             client = _get_supabase()
             if _use_supabase and client:
-                client.table("chat_sessions").insert({
-                    "id": session_id, "organization_id": organization_id, "title": title,
-                    "document_ids": doc_list, "created_at": now, "updated_at": now,
-                }).execute()
+                row = {
+                    "id": session_id,
+                    "organization_id": organization_id,
+                    "title": title,
+                    "document_ids": doc_list,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                if user_id:
+                    row["user_id"] = user_id
+                client.table("chat_sessions").insert(row).execute()
         except Exception:
             pass
         conn = _get_local_db()
-        conn.execute("INSERT INTO chat_sessions (id, organization_id, document_ids, title, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-                     (session_id, organization_id, doc_ids_json, title, now, now))
+        conn.execute(
+            "INSERT INTO chat_sessions (id, organization_id, user_id, document_ids, title, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+            (session_id, organization_id, user_id, doc_ids_json, title, now, now),
+        )
         conn.commit()
         return session_id
 
     @staticmethod
-    def list_chat_sessions(organization_id: str, document_id: str = None) -> list[dict]:
+    def list_chat_sessions(
+        organization_id: str,
+        document_id: str = None,
+        user_id: str = None,
+    ) -> list[dict]:
         try:
             client = _get_supabase()
             if _use_supabase and client:
-                query = client.table("chat_sessions").select("*").eq("organization_id", organization_id).order("updated_at", desc=True)
+                query = (
+                    client.table("chat_sessions")
+                    .select("*")
+                    .eq("organization_id", organization_id)
+                    .order("updated_at", desc=True)
+                )
+                if user_id:
+                    query = query.eq("user_id", user_id)
                 result = query.execute()
                 if result.data:
                     rows = result.data
@@ -383,7 +418,16 @@ class SupabaseDB:
         except Exception:
             pass
         conn = _get_local_db()
-        rows = conn.execute("SELECT * FROM chat_sessions WHERE organization_id=? ORDER BY updated_at DESC", (organization_id,)).fetchall()
+        if user_id:
+            rows = conn.execute(
+                "SELECT * FROM chat_sessions WHERE organization_id=? AND user_id=? ORDER BY updated_at DESC",
+                (organization_id, user_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM chat_sessions WHERE organization_id=? ORDER BY updated_at DESC",
+                (organization_id,),
+            ).fetchall()
         result = []
         for r in rows:
             d = dict(r)

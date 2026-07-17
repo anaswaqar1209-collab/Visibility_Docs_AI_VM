@@ -221,6 +221,7 @@ CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(organization_id);
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
+    user_id TEXT,
     document_ids JSONB DEFAULT '[]'::jsonb,
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TIMESTAMPTZ DEFAULT now(),
@@ -228,8 +229,10 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 );
 
 ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS document_ids JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_org ON chat_sessions(organization_id);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
 
 CREATE TABLE IF NOT EXISTS chat_messages (
     id SERIAL PRIMARY KEY,

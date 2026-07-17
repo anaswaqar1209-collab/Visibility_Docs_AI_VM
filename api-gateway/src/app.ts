@@ -10,6 +10,8 @@ import chatRoutes from './routes/chat';
 import healthRoutes from './routes/health';
 import teamRoutes from './routes/team';
 import superAdminRoutes from './routes/superAdmin';
+import activityRoutes from './routes/activity';
+import groqRoutes from './routes/groq';
 import { errorHandler, notFound } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
 import { listAllDocumentIntelligence, reprocessDocument } from './controllers/documentsController';
@@ -53,6 +55,8 @@ app.post('/api/docs/documents/:id/process', authenticate, reprocessDocument);
 app.use('/api/docs/documents', documentsRoutes);
 app.use('/api/docs/chat', chatRoutes);
 app.use('/api/docs/team', teamRoutes);
+app.use('/api/docs/activity', activityRoutes);
+app.use('/api/docs/groq', groqRoutes);
 app.use('/api/docs/super-admin', superAdminRoutes);
 
 app.use(notFound);

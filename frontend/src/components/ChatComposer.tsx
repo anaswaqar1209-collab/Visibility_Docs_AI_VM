@@ -24,7 +24,8 @@ export default function ChatComposer({
     return (
         <div
             className={cn(
-                "glass rounded-full border border-white/10 p-1.5 pl-5 flex items-center gap-2 shadow-lg",
+                "rounded-full border border-[var(--border)] bg-[var(--surface)] p-1.5 pl-5 flex items-center gap-2 shadow-[0_12px_40px_rgba(0,0,0,0.25)]",
+                "focus-within:border-[var(--accent)] focus-within:ring-[3px] focus-within:ring-[var(--accent-ring)] transition-all",
                 className
             )}
         >
@@ -40,13 +41,13 @@ export default function ChatComposer({
                 rows={1}
                 disabled={sending}
                 placeholder={placeholder}
-                className="flex-1 bg-transparent border-0 outline-none resize-none text-sm text-slate-100 placeholder:text-slate-500 py-2.5 min-h-[40px] max-h-32 disabled:opacity-60"
+                className="flex-1 bg-transparent border-0 outline-none resize-none text-sm text-[var(--foreground)] placeholder:text-[var(--foreground-muted)] py-2.5 min-h-[40px] max-h-32 disabled:opacity-60"
             />
             <button
                 type="button"
                 onClick={onSend}
                 disabled={sending || !value.trim()}
-                className="btn-gradient rounded-full h-10 w-10 flex items-center justify-center shrink-0 disabled:opacity-50 shadow-md"
+                className="btn-gradient rounded-full h-10 w-10 flex items-center justify-center shrink-0 disabled:opacity-50"
                 aria-label="Send message"
             >
                 {sending ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}

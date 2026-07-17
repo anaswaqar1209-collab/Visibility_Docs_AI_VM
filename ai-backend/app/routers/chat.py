@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, Body, status
+from fastapi import APIRouter, HTTPException, Body, status, Query
+from typing import Optional
 from ..models.schemas import ChatRequest, ChatResponse, ChatSessionResponse, ChatSessionListResponse
 from ..services.chat_service import chat_service
 from ..database import SupabaseDB
@@ -10,10 +11,13 @@ router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
     "/sessions",
     response_model=ChatSessionListResponse,
     summary="List chat sessions",
-    description="List all chat sessions for an organization",
+    description="List chat sessions for an organization, optionally scoped to a user",
 )
-async def list_sessions(organization_id: str):
-    sessions = SupabaseDB.list_chat_sessions(organization_id)
+async def list_sessions(
+    organization_id: str,
+    user_id: Optional[str] = Query(None),
+):
+    sessions = SupabaseDB.list_chat_sessions(organization_id, user_id=user_id)
     return {"sessions": sessions, "total": len(sessions)}
 
 
@@ -70,6 +74,7 @@ async def chat_with_document(request: ChatRequest = Body(...)):
         date_to=request.date_to,
         chat_history=request.chat_history,
         session_id=request.session_id,
+        user_id=request.user_id,
     )
 
     return ChatResponse(
@@ -102,6 +107,7 @@ async def chat_all_documents(request: ChatRequest = Body(...)):
         date_to=request.date_to,
         chat_history=request.chat_history,
         session_id=request.session_id,
+        user_id=request.user_id,
     )
 
     return ChatResponse(

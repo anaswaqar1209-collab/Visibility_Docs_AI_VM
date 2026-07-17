@@ -65,11 +65,25 @@ class ChatService:
             is_followup=not is_first,
             system_prompt=prompt,
         )
-    def _get_or_create_session(self, session_id: str, organization_id: str, document_ids: list = None) -> tuple[str, list | None, bool]:
+    def _get_or_create_session(
+        self,
+        session_id: str,
+        organization_id: str,
+        document_ids: list = None,
+        user_id: str = None,
+    ) -> tuple[str, list | None, bool]:
         """document_ids=None means all docs; a list means selected scope only."""
         is_first = True
         if session_id:
             existing = SupabaseDB.get_chat_session(session_id)
+            if existing:
+                # Do not continue another user's session
+                owner = existing.get("user_id")
+                session_org = existing.get("organization_id")
+                if user_id and owner and owner != user_id:
+                    existing = None
+                elif session_org and session_org != organization_id:
+                    existing = None
             if existing:
                 stored_ids = existing.get("document_ids") or []
                 messages = existing.get("messages") or []
@@ -85,7 +99,7 @@ class ChatService:
                     resolved = None
                 return session_id, resolved, is_first
         doc_list = list(document_ids) if document_ids is not None else []
-        new_id = SupabaseDB.create_chat_session(organization_id, "New Chat", doc_list)
+        new_id = SupabaseDB.create_chat_session(organization_id, "New Chat", doc_list, user_id=user_id)
         return new_id, (list(document_ids) if document_ids is not None else None), True
 
     @staticmethod
@@ -214,12 +228,15 @@ class ChatService:
     def chat_with_document(self, question: str, document_ids: list, organization_id: str,
                            document_type: str = None, phase3_agent: str = None,
                            status: str = None, date_from: str = None, date_to: str = None,
-                           chat_history: list[dict] = None, session_id: str = None) -> dict:
+                           chat_history: list[dict] = None, session_id: str = None,
+                           user_id: str = None) -> dict:
         chat_log = get_chat_logger()
         chat_log.chat_start(question, session_id=session_id or "", doc_count=len(document_ids or []))
         t_start = time.time()
 
-        sid, resolved_ids, is_first = self._get_or_create_session(session_id, organization_id, document_ids)
+        sid, resolved_ids, is_first = self._get_or_create_session(
+            session_id, organization_id, document_ids, user_id=user_id
+        )
 
         # Greetings / small-talk → reply without searching documents
         if self._is_chitchat(question):

@@ -6,6 +6,7 @@ import openRemoteService from '../services/openRemoteService';
 import logger from '../utils/logger';
 import { TEAM_MEMBER_EDITABLE_PERMISSIONS } from '../types/permissions';
 import { normalizeTeamPermissions, permissionsToPlain, pickEditableTeamPermissions, buildFlatPermissionsDocument } from '../utils/permissionsUtil';
+import { recordActivityFromReq } from '../services/activityLog';
 
 function generateUserId() {
     return `usr_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
@@ -157,6 +158,14 @@ export const createMember = async (req: Request, res: Response, next: NextFuncti
                 openRemoteUserId: openRemoteUserId || null,
             },
         });
+        recordActivityFromReq(req, {
+            action: 'team.member.create',
+            category: 'team',
+            resourceType: 'user',
+            resourceId: member.userId,
+            message: `Added team member ${member.email}`,
+            metadata: { email: member.email, fullName: member.fullName },
+        });
     } catch (error) {
         next(error);
     }
@@ -201,6 +210,14 @@ export const updateMemberStatus = async (req: Request, res: Response, next: Next
             { new: true }
         ).select('-passwordHash -openRemoteSecret');
         if (!member) return res.status(404).json({ success: false, message: 'Team member not found' });
+        recordActivityFromReq(req, {
+            action: 'team.member.status',
+            category: 'team',
+            resourceType: 'user',
+            resourceId: member.userId,
+            message: `Set ${member.email} status to ${status}`,
+            metadata: { status },
+        });
         res.json({ success: true, data: { member } });
     } catch (error) {
         next(error);
@@ -250,6 +267,14 @@ export const updateMemberPermissions = async (req: Request, res: Response, next:
                     : null,
             },
         });
+        recordActivityFromReq(req, {
+            action: 'team.member.permissions',
+            category: 'team',
+            resourceType: 'user',
+            resourceId: String(req.params.userId),
+            message: `Updated permissions for team member ${req.params.userId}`,
+            metadata: { permissions: nextPerms },
+        });
     } catch (error) {
         next(error);
     }
@@ -265,6 +290,13 @@ export const deleteMember = async (req: Request, res: Response, next: NextFuncti
         if (!result.deletedCount) {
             return res.status(404).json({ success: false, message: 'Team member not found' });
         }
+        recordActivityFromReq(req, {
+            action: 'team.member.delete',
+            category: 'team',
+            resourceType: 'user',
+            resourceId: String(req.params.userId),
+            message: `Removed team member ${req.params.userId}`,
+        });
         res.json({ success: true, message: 'Team member deleted' });
     } catch (error) {
         next(error);

@@ -1,15 +1,10 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import Link from "next/link";
-import { Download, ExternalLink, Loader2, Star, Trash2 } from "lucide-react";
+import { Loader2, Star, Trash2 } from "lucide-react";
 import { apiRequest } from "@/lib/apiClient";
 import { inferDocTypeFromFilename } from "@/lib/documentAgents";
-import {
-    appendAuthToken,
-    getDocumentAiImageUrl,
-    getDocumentDownloadUrl,
-} from "@/lib/documents";
+import { appendAuthToken } from "@/lib/documents";
 
 type DocRecord = {
     documentId: string;
@@ -24,25 +19,6 @@ type DocRecord = {
     createdAt: string;
     metadata?: { cvScore?: number; phase3Agent?: string } | null;
 };
-
-type SimilarDoc = {
-    document_id: string;
-    document_title?: string;
-    score: number;
-};
-
-type ExtractedImage = {
-    page?: number;
-    image_path?: string;
-    description?: string;
-};
-
-function formatBytes(n: number) {
-    if (!n) return "—";
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function scoreColor(score: number) {
     if (score >= 70) return "bg-emerald-500/15 text-emerald-300 border-emerald-500/25";
@@ -67,8 +43,8 @@ function statusBadgeClass(status: string) {
 function typeBadgeClass(docType: string) {
     const t = docType.toLowerCase();
     if (t === "resume" || t === "cv") return "bg-cyan-500/15 text-cyan-300 border-cyan-500/25";
-    if (t === "invoice") return "bg-blue-500/15 text-blue-300 border-blue-500/25";
-    if (t === "contract") return "bg-purple-500/15 text-purple-300 border-purple-500/25";
+    if (t === "invoice") return "bg-[var(--accent-muted)] text-[var(--accent)] border-[rgba(45,212,191,0.25)]";
+    if (t === "contract") return "bg-teal-500/15 text-teal-300 border-teal-500/25";
     return "bg-slate-500/15 text-slate-300 border-slate-500/25";
 }
 
@@ -102,10 +78,59 @@ function isAnalysisFinished(
     return false;
 }
 
+function DetailSkeleton() {
+    return (
+        <div className="space-y-5 w-full max-w-4xl animate-fade-in-up">
+            <div className="space-y-3">
+                <div className="h-8 w-2/3 max-w-md rounded-lg bg-white/5 animate-shimmer" />
+                <div className="flex gap-2">
+                    <div className="h-6 w-16 rounded-full bg-white/5 animate-shimmer" />
+                    <div className="h-6 w-20 rounded-full bg-white/5 animate-shimmer" />
+                    <div className="h-6 w-14 rounded-full bg-white/5 animate-shimmer" />
+                </div>
+            </div>
+            <div className="surface-card !rounded-xl overflow-hidden min-h-[50vh]">
+                <div className="px-5 py-4 border-b border-[var(--border)] flex items-center gap-2">
+                    <div className="h-4 w-4 rounded bg-amber-400/30 animate-pulse" />
+                    <div className="h-4 w-32 rounded bg-white/5 animate-shimmer" />
+                    <div className="ml-auto h-6 w-24 rounded-full bg-white/5 animate-shimmer" />
+                </div>
+                <div className="p-5 sm:p-6 space-y-5">
+                    {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="space-y-2">
+                            <div className="flex justify-between">
+                                <div className="h-3 w-24 rounded bg-white/5 animate-shimmer" />
+                                <div className="h-3 w-12 rounded bg-white/5 animate-shimmer" />
+                            </div>
+                            <div className="h-2.5 w-full rounded-full bg-white/5 overflow-hidden">
+                                <div
+                                    className="h-full rounded-full bg-gradient-to-r from-teal-500/30 via-teal-400/50 to-teal-500/30 animate-shimmer"
+                                    style={{ width: `${55 + i * 8}%` }}
+                                />
+                            </div>
+                        </div>
+                    ))}
+                    <div className="pt-2 space-y-2">
+                        <div className="h-3 w-20 rounded bg-white/5 animate-shimmer" />
+                        <div className="flex flex-wrap gap-2">
+                            {[1, 2, 3].map((i) => (
+                                <div key={i} className="h-7 w-20 rounded-lg bg-white/5 animate-shimmer" />
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p className="text-center text-xs text-[var(--foreground-muted)] flex items-center justify-center gap-2">
+                <Loader2 size={12} className="animate-spin text-[var(--accent)]" />
+                Loading evaluation…
+            </p>
+        </div>
+    );
+}
+
 export default function DocumentDetailPanel({
     doc,
     ai,
-    isDark,
     colors,
     onDelete,
     showDelete = false,
@@ -113,14 +138,12 @@ export default function DocumentDetailPanel({
 }: {
     doc: DocRecord;
     ai?: Record<string, unknown> | null;
-    isDark: boolean;
+    isDark?: boolean;
     colors: { textMuted: string; textPrimary: string };
     onDelete?: () => void;
     showDelete?: boolean;
     analyzing?: boolean;
 }) {
-    const [similar, setSimilar] = useState<SimilarDoc[]>([]);
-    const [images, setImages] = useState<ExtractedImage[]>([]);
     const [descFileUrl, setDescFileUrl] = useState("");
 
     const inferredType = inferDocTypeFromFilename(doc.originalFilename);
@@ -129,43 +152,39 @@ export default function DocumentDetailPanel({
     const cvData = (ai?.cv_extraction_data || null) as Record<string, unknown> | null;
     const rawText = typeof ai?.raw_text === "string" ? ai.raw_text : "";
     const extracted = (ai?.extracted_data || null) as Record<string, unknown> | null;
-    const pageCount = ai?.page_count ?? doc.pageCount;
-    const fileSize = ai?.file_size ? Number(ai.file_size) : doc.sizeBytes;
     const displayStatus = statusLabel(String(ai?.status || doc.status));
     const finished = isAnalysisFinished(ai, undefined, doc.status);
     const isProcessing = analyzing && !finished && (displayStatus === "processing" || doc.status === "processing");
     const showCv = docType === "resume" || inferredType === "resume";
+    const showSkeleton = isProcessing || (analyzing && !hasModelData(ai));
 
     useEffect(() => {
-        if (!doc.documentId || !hasModelData(ai)) return;
-        apiRequest(`/docs/documents/${doc.documentId}/similar?limit=5`)
-            .then((d) => setSimilar(d?.data?.results || []))
-            .catch(() => setSimilar([]));
+        if (!doc.documentId || !hasModelData(ai)) {
+            setDescFileUrl("");
+            return;
+        }
         apiRequest(`/docs/documents/${doc.documentId}/images`)
-            .then((d) => {
-                setImages(d?.data?.images || []);
-                setDescFileUrl(d?.data?.descriptions_file || "");
-            })
-            .catch(() => {
-                setImages([]);
-                setDescFileUrl("");
-            });
+            .then((d) => setDescFileUrl(d?.data?.descriptions_file || ""))
+            .catch(() => setDescFileUrl(""));
     }, [doc.documentId, ai]);
 
-    const cardClass = isDark ? "glass rounded-xl border border-white/10" : "bg-slate-50 border border-slate-200 rounded-xl";
+    const cardClass = "surface-card !rounded-xl";
+
+    if (showSkeleton) {
+        return <DetailSkeleton />;
+    }
 
     return (
-        <div className="space-y-5 max-w-2xl">
+        <div className="space-y-5 w-full max-w-4xl animate-fade-in-up">
             <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                    <h2 className={`text-2xl font-bold ${colors.textPrimary}`}>{doc.originalFilename}</h2>
+                    <h2 className={`text-xl sm:text-2xl font-bold tracking-tight break-all ${colors.textPrimary}`}>{doc.originalFilename}</h2>
                     <div className="flex flex-wrap gap-2 mt-2">
                         <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold border ${typeBadgeClass(docType)}`}>
                             {docType}
                         </span>
                         <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusBadgeClass(displayStatus)}`}>
-                            {isProcessing && <Loader2 size={10} className="animate-spin" />}
-                            {isProcessing ? "processing" : displayStatus}
+                            {displayStatus}
                         </span>
                         {showCv && !Number.isNaN(cvScore) && (
                             <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold border ${scoreColor(cvScore)}`}>
@@ -175,112 +194,71 @@ export default function DocumentDetailPanel({
                     </div>
                 </div>
                 {showDelete && onDelete && (
-                    <button type="button" onClick={onDelete} className="btn-ghost rounded-lg px-2 py-2 text-red-300 hover:bg-red-500/10" title="Delete">
+                    <button type="button" onClick={onDelete} className="btn-ghost rounded-lg px-2 py-2 text-red-300 hover:bg-red-500/10 shrink-0 min-h-11 min-w-11 flex items-center justify-center" title="Delete">
                         <Trash2 size={16} />
                     </button>
                 )}
             </div>
 
-            {isProcessing && (
-                <div className="glass rounded-xl px-4 py-3 flex items-center gap-2 text-sm text-amber-200 border border-amber-500/20">
-                    <Loader2 size={16} className="animate-spin" />
-                    AI model is analyzing this document…
-                </div>
-            )}
-
-            {finished && !hasModelData(ai) && !isProcessing && (
-                <div className="glass rounded-xl px-4 py-3 text-sm text-slate-300 border border-white/10">
+            {finished && !hasModelData(ai) && (
+                <div className="surface-card px-4 py-3 text-sm text-[var(--foreground-secondary)] border border-[var(--border)]">
                     Analysis finished but scores are not available yet. Try re-opening this document in a moment.
                 </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
-                {[
-                    ["File", doc.originalFilename],
-                    ["Pages", pageCount ?? "—"],
-                    ["Size", formatBytes(Number(fileSize))],
-                    ["Created", doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : "—"],
-                ].map(([label, value]) => (
-                    <div key={label} className={`p-4 ${cardClass}`}>
-                        <p className={`text-[10px] font-semibold uppercase tracking-wider ${colors.textMuted}`}>{label}</p>
-                        <p className={`text-sm font-semibold mt-1 truncate ${colors.textPrimary}`}>{value}</p>
-                    </div>
-                ))}
-            </div>
-
-            <a href={getDocumentDownloadUrl(doc.documentId)} target="_blank" rel="noreferrer" className="btn-secondary inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm">
-                <Download size={14} /> Open File
-            </a>
-
             {rawText && (
-                <details className={`${cardClass} overflow-hidden`}>
-                    <summary className={`px-4 py-3 text-sm font-semibold cursor-pointer ${colors.textPrimary}`}>
-                        OCR Preview ({rawText.length.toLocaleString()} chars)
-                        {descFileUrl && (
-                            <a
-                                href={appendAuthToken(descFileUrl)}
-                                target="_blank"
-                                rel="noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="ml-3 text-xs text-blue-400 hover:underline"
-                            >
-                                Download All Descriptions
-                            </a>
-                        )}
+                <details className={`${cardClass} overflow-hidden group`}>
+                    <summary className={`px-5 py-4 text-sm font-semibold cursor-pointer list-none flex items-center justify-between gap-3 ${colors.textPrimary}`}>
+                        <span>OCR Preview ({rawText.length.toLocaleString()} chars)</span>
+                        <span className="flex items-center gap-3 shrink-0">
+                            {descFileUrl && (
+                                <a
+                                    href={appendAuthToken(descFileUrl)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-xs font-medium text-[var(--accent)] hover:underline"
+                                >
+                                    Download All Descriptions
+                                </a>
+                            )}
+                            <span className="text-[var(--foreground-muted)] text-xs group-open:rotate-180 transition-transform">▼</span>
+                        </span>
                     </summary>
-                    <div className={`max-h-96 overflow-y-auto p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap ${colors.textMuted}`}>
+                    <div className={`max-h-96 overflow-y-auto px-5 pb-5 text-xs font-mono leading-relaxed whitespace-pre-wrap border-t border-[var(--border)] pt-4 ${colors.textMuted}`}>
                         {rawText.slice(0, 10000)}
                         {rawText.length > 10000 && "…"}
                     </div>
                 </details>
             )}
 
-            {images.length > 0 && (
-                <details className={`${cardClass} overflow-hidden`}>
-                    <summary className={`px-4 py-3 text-sm font-semibold cursor-pointer ${colors.textPrimary}`}>
-                        Image Previews ({images.length})
-                    </summary>
-                    <div className="divide-y divide-white/5">
-                        {images.map((img, i) => (
-                            <div key={i} className="p-4">
-                                <p className={`text-xs font-medium mb-2 ${colors.textMuted}`}>Page {img.page ?? i + 1}</p>
-                                {img.image_path && (
-                                    <img
-                                        src={getDocumentAiImageUrl(doc.documentId, img.image_path)}
-                                        alt={`Page ${img.page ?? i + 1}`}
-                                        className="max-h-48 rounded-lg border border-white/10 mb-2 object-contain bg-black/20"
-                                    />
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                </details>
-            )}
-
             {showCv && cvData && (
-                <div className={`${cardClass} overflow-hidden`}>
-                    <div className={`px-4 py-3 flex items-center gap-2 border-b border-white/10 ${colors.textPrimary}`}>
-                        <Star size={14} className="text-amber-400" />
-                        <span className="text-sm font-semibold">CV Evaluation</span>
+                <div className={`${cardClass} overflow-hidden min-h-[60vh]`}>
+                    <div className={`px-5 py-4 flex items-center gap-2 border-b border-[var(--border)] ${colors.textPrimary}`}>
+                        <Star size={16} className="text-amber-400" />
+                        <span className="text-base font-semibold">CV Evaluation</span>
                         {!Number.isNaN(cvScore) && (
-                            <span className={`ml-auto inline-flex px-2 py-0.5 rounded-full text-xs font-semibold border ${scoreColor(cvScore)}`}>
+                            <span className={`ml-auto inline-flex px-2.5 py-1 rounded-full text-xs font-semibold border ${scoreColor(cvScore)}`}>
                                 Score: {cvScore}/100
                             </span>
                         )}
                     </div>
-                    <div className="p-4 space-y-3">
+                    <div className="p-5 sm:p-6 space-y-5">
                         {(["skills_score", "experience_score", "education_score", "completeness_score"] as const).map((key) => {
                             const val = cvData[key];
                             if (val == null) return null;
                             const pct = Math.min(100, Math.max(0, Number(val)));
                             return (
                                 <div key={key}>
-                                    <div className={`flex justify-between text-xs mb-1 ${colors.textMuted}`}>
-                                        <span className="capitalize">{key.replace(/_score$/, "")} Score</span>
-                                        <span>{pct}/100</span>
+                                    <div className={`flex justify-between text-sm mb-2 ${colors.textMuted}`}>
+                                        <span className="capitalize font-medium">{key.replace(/_score$/, "")} Score</span>
+                                        <span className="font-mono tabular-nums">{pct}/100</span>
                                     </div>
-                                    <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
-                                        <div className={`h-full rounded-full transition-all duration-500 ${barColor(pct)}`} style={{ width: `${pct}%` }} />
+                                    <div className="w-full h-2.5 bg-white/10 rounded-full overflow-hidden">
+                                        <div
+                                            className={`h-full rounded-full transition-all duration-700 ease-out ${barColor(pct)}`}
+                                            style={{ width: `${pct}%` }}
+                                        />
                                     </div>
                                 </div>
                             );
@@ -288,10 +266,10 @@ export default function DocumentDetailPanel({
 
                         {Array.isArray(cvData.strengths) && cvData.strengths.length > 0 && (
                             <div>
-                                <p className={`text-xs font-semibold mb-1.5 ${colors.textPrimary}`}>Strengths</p>
-                                <div className="flex flex-wrap gap-1.5">
+                                <p className={`text-sm font-semibold mb-2 ${colors.textPrimary}`}>Strengths</p>
+                                <div className="flex flex-wrap gap-2">
                                     {(cvData.strengths as string[]).map((s, i) => (
-                                        <span key={i} className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 text-xs border border-emerald-500/20">
+                                        <span key={i} className="px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-300 text-sm border border-emerald-500/20">
                                             {s}
                                         </span>
                                     ))}
@@ -301,10 +279,10 @@ export default function DocumentDetailPanel({
 
                         {Array.isArray(cvData.areas_for_improvement) && cvData.areas_for_improvement.length > 0 && (
                             <div>
-                                <p className={`text-xs font-semibold mb-1.5 ${colors.textPrimary}`}>Areas for Improvement</p>
-                                <div className="flex flex-wrap gap-1.5">
+                                <p className={`text-sm font-semibold mb-2 ${colors.textPrimary}`}>Areas for Improvement</p>
+                                <div className="flex flex-wrap gap-2">
                                     {(cvData.areas_for_improvement as string[]).map((a, i) => (
-                                        <span key={i} className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-300 text-xs border border-amber-500/20">
+                                        <span key={i} className="px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-300 text-sm border border-amber-500/20">
                                             {a}
                                         </span>
                                     ))}
@@ -314,15 +292,19 @@ export default function DocumentDetailPanel({
 
                         {typeof cvData.recommendation === "string" && cvData.recommendation && (
                             <div>
-                                <p className={`text-xs font-semibold mb-1 ${colors.textPrimary}`}>Recommendation</p>
-                                <p className={`text-sm rounded-lg p-3 glass border border-white/10 ${colors.textPrimary}`}>{cvData.recommendation}</p>
+                                <p className={`text-sm font-semibold mb-2 ${colors.textPrimary}`}>Recommendation</p>
+                                <p className={`text-sm rounded-xl p-4 bg-[var(--accent-muted)] border border-[rgba(45,212,191,0.2)] ${colors.textPrimary} leading-relaxed`}>
+                                    {cvData.recommendation}
+                                </p>
                             </div>
                         )}
 
                         {typeof cvData.evaluation_summary === "string" && cvData.evaluation_summary && (
                             <div>
-                                <p className={`text-xs font-semibold mb-1 ${colors.textPrimary}`}>Evaluation Summary</p>
-                                <p className={`text-sm rounded-lg p-3 glass border border-white/10 ${colors.textMuted}`}>{cvData.evaluation_summary}</p>
+                                <p className={`text-sm font-semibold mb-2 ${colors.textPrimary}`}>Evaluation Summary</p>
+                                <p className={`text-sm rounded-xl p-4 bg-white/[0.03] border border-[var(--border)] ${colors.textMuted} leading-relaxed`}>
+                                    {cvData.evaluation_summary}
+                                </p>
                             </div>
                         )}
                     </div>
@@ -330,29 +312,17 @@ export default function DocumentDetailPanel({
             )}
 
             {extracted && Object.keys(extracted).length > 0 && !showCv && (
-                <div className={`${cardClass} p-4`}>
-                    <p className={`text-xs font-semibold mb-2 ${colors.textPrimary}`}>Extracted Data</p>
-                    <pre className={`text-xs overflow-x-auto max-h-48 ${colors.textMuted}`}>{JSON.stringify(extracted, null, 2)}</pre>
+                <div className={`${cardClass} p-5 min-h-[40vh]`}>
+                    <p className={`text-sm font-semibold mb-3 ${colors.textPrimary}`}>Extracted Data</p>
+                    <pre className={`text-xs overflow-x-auto max-h-[60vh] font-mono ${colors.textMuted}`}>{JSON.stringify(extracted, null, 2)}</pre>
                 </div>
             )}
 
-            {similar.length > 0 && (
-                <div>
-                    <p className={`text-sm font-semibold mb-2 ${colors.textPrimary}`}>Similar Documents</p>
-                    <div className="space-y-2">
-                        {similar.slice(0, 5).map((s, i) => (
-                            <div key={i} className={`flex items-center justify-between rounded-xl px-4 py-3 glass border border-white/10`}>
-                                <span className={`text-sm truncate ${colors.textPrimary}`}>{s.document_title || s.document_id?.slice(0, 12)}</span>
-                                <span className={`text-xs ml-2 ${colors.textMuted}`}>{(s.score * 100).toFixed(0)}% match</span>
-                            </div>
-                        ))}
-                    </div>
+            {showCv && !cvData && finished && (
+                <div className="surface-card px-5 py-8 text-center text-sm text-[var(--foreground-muted)]">
+                    No CV evaluation data available for this document.
                 </div>
             )}
-
-            <Link href={`/documents/${doc.documentId}`} className="btn-secondary inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs">
-                <ExternalLink size={12} /> Preview file
-            </Link>
         </div>
     );
 }

@@ -1,13 +1,19 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import {
-    Sparkles, ChevronLeft, ChevronRight, FileText, CheckSquare, Square,
-    Plus, Trash2, MessageSquare, Search,
+    Sparkles, ChevronLeft, ChevronRight, FileText,
+    Plus, Trash2, MessageSquare,
 } from "lucide-react";
 import ClientLayout from "@/components/ClientLayout";
 import ChatComposer from "@/components/ChatComposer";
+import ChatScopePanel, {
+    type ChatScope,
+    type DocStatusFilter,
+    type ScopeLibraryDoc,
+} from "@/components/ChatScopePanel";
 import { useTheme } from "@/context/ColorContext";
 import { apiRequest } from "@/lib/apiClient";
 import { usePermissions } from "@/context/PermissionsContext";
@@ -24,12 +30,7 @@ type ChatMessage = {
     }>;
 };
 
-type LibraryDoc = {
-    documentId: string;
-    originalFilename: string;
-    status: string;
-    pythonDocumentId?: string | null;
-};
+type LibraryDoc = ScopeLibraryDoc;
 
 type ChatSessionSummary = {
     id: string;
@@ -39,14 +40,11 @@ type ChatSessionSummary = {
     created_at?: string;
 };
 
-type ChatScope = "all" | "selected";
-type DocStatusFilter = "" | "ready" | "processing" | "failed";
-
 const WELCOME_MSG: ChatMessage = {
     id: "welcome",
     role: "assistant",
     content:
-        "Ask about your uploaded documents — summaries, expiries, invoice fields, and more. Use **New chat** to start a thread, or pick a past conversation from the sidebar.",
+        "Ask about your uploaded documents — summaries, expiries, invoice fields, and more. Start a **New chat**, or open a past conversation from the left.",
 };
 
 const LAST_SESSION_KEY = "docs_ai_last_chat_session";
@@ -106,7 +104,9 @@ function ChatContent() {
     const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MSG]);
     const [input, setInput] = useState("");
     const [sending, setSending] = useState(false);
-    const [sidebarOpen, setSidebarOpen] = useState(true);
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [scopePanelOpen, setScopePanelOpen] = useState(false);
+    const [isLg, setIsLg] = useState(false);
     const [chatScope, setChatScope] = useState<ChatScope>("all");
     const [libraryDocs, setLibraryDocs] = useState<LibraryDoc[]>([]);
     const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
@@ -143,6 +143,26 @@ function ChatContent() {
         loadDocs();
         loadSessions();
     }, [loadDocs, loadSessions]);
+
+    useEffect(() => {
+        const mq = window.matchMedia("(min-width: 1024px)");
+        const apply = () => {
+            setIsLg(mq.matches);
+            setSidebarOpen(mq.matches);
+        };
+        apply();
+        mq.addEventListener("change", apply);
+        return () => mq.removeEventListener("change", apply);
+    }, []);
+
+    useEffect(() => {
+        if (!sidebarOpen || isLg) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setSidebarOpen(false);
+        };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [sidebarOpen, isLg]);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -187,6 +207,7 @@ function ChatContent() {
 
             setSessionId(session.id);
             localStorage.setItem(LAST_SESSION_KEY, session.id);
+            if (!isLg) setSidebarOpen(false);
 
             const pythonIds: string[] = session.document_ids || [];
             if (pythonIds.length) {
@@ -242,9 +263,10 @@ function ChatContent() {
                 {
                     id: `e_${Date.now()}`,
                     role: "assistant",
-                    content: "Select at least one processed document in the scope panel before chatting.",
+                    content: "Select at least one processed document in Document scope before chatting.",
                 },
             ]);
+            setScopePanelOpen(true);
             return;
         }
 
@@ -302,10 +324,12 @@ function ChatContent() {
             ? `All documents (${libraryDocs.length})`
             : `Selected (${selectedDocIds.length} of ${selectableDocs.length})`;
 
+    const isWelcomeOnly = messages.length === 1 && messages[0].id === "welcome";
+
     if (!canChat()) {
         return (
             <div className="h-full flex items-center justify-center p-8">
-                <div className={`glass rounded-2xl max-w-md p-6 text-center space-y-2 ${colors.textPrimary}`}>
+                <div className={`surface-card max-w-md p-6 text-center space-y-2 ${colors.textPrimary}`}>
                     <p className="text-lg font-semibold">Chat not available</p>
                     <p className={`text-sm ${colors.textMuted}`}>
                         You do not have Chat permission. Ask your admin to enable it for your account.
@@ -316,244 +340,286 @@ function ChatContent() {
     }
 
     return (
-        <div className="h-full min-h-0 flex">
-            {sidebarOpen && (
-                <aside className={`w-80 shrink-0 border-r ${colors.borderPrimary} flex flex-col bg-black/10`}>
-                    {/* Chat history */}
-                    <div className={`px-4 py-3 border-b ${colors.borderPrimary}`}>
-                        <div className="flex items-center justify-between gap-2">
-                            <h2 className={`text-sm font-semibold ${colors.textPrimary}`}>Chats</h2>
-                            <button
-                                type="button"
-                                onClick={startNewChat}
-                                className="btn-gradient rounded-lg px-2.5 py-1.5 text-xs inline-flex items-center gap-1"
-                            >
-                                <Plus size={12} /> New chat
-                            </button>
-                        </div>
+        <div className="h-full min-h-0 flex relative">
+            {/* Mobile backdrop for chat history */}
+            <button
+                type="button"
+                className={`lg:hidden fixed inset-0 z-30 bg-black/50 backdrop-blur-sm transition-opacity ${
+                    sidebarOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+                }`}
+                aria-label="Close chats"
+                onClick={() => setSidebarOpen(false)}
+                tabIndex={sidebarOpen && !isLg ? 0 : -1}
+            />
+
+            <aside
+                className={`w-[min(280px,85vw)] border-r border-[var(--border)] flex flex-col z-40
+                    fixed inset-y-0 left-0 transition-transform duration-200 ease-out
+                    lg:static lg:z-auto lg:shrink-0 lg:translate-x-0 lg:w-[280px]
+                    ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:hidden"}
+                    ${
+                        isDark
+                            ? "bg-gradient-to-b from-[var(--surface)] to-[rgba(12,20,30,0.95)]"
+                            : "bg-gradient-to-b from-white to-slate-50"
+                    }`}
+            >
+                <div className="px-4 py-4 border-b border-[var(--border)]">
+                    <div className="flex items-center justify-between gap-2">
+                        <h2 className={`text-sm font-semibold tracking-tight ${colors.textPrimary}`}>Chats</h2>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                startNewChat();
+                                if (!isLg) setSidebarOpen(false);
+                            }}
+                            className="btn-gradient rounded-lg px-2.5 py-1.5 text-xs inline-flex items-center gap-1 min-h-9"
+                        >
+                            <Plus size={12} /> New
+                        </button>
                     </div>
-                    <div className="max-h-48 overflow-y-auto border-b border-white/5">
-                        {sessionsLoading ? (
-                            <p className={`px-4 py-3 text-xs ${colors.textMuted}`}>Loading chats…</p>
-                        ) : sessions.length === 0 ? (
-                            <p className={`px-4 py-3 text-xs ${colors.textMuted}`}>No past chats yet.</p>
-                        ) : (
-                            sessions.map((s) => (
-                                <button
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto py-2">
+                    {sessionsLoading ? (
+                        <p className={`px-4 py-3 text-xs ${colors.textMuted}`}>Loading chats…</p>
+                    ) : sessions.length === 0 ? (
+                        <div className="px-4 py-8 text-center">
+                            <MessageSquare size={22} className="mx-auto mb-2 text-[var(--accent)] opacity-60" />
+                            <p className={`text-xs ${colors.textMuted}`}>No past chats yet.</p>
+                            <p className={`text-[11px] mt-1 ${colors.textMuted}`}>Start typing to create one.</p>
+                        </div>
+                    ) : (
+                        sessions.map((s) => {
+                            const active = sessionId === s.id;
+                            return (
+                                <div
                                     key={s.id}
-                                    type="button"
-                                    onClick={() => loadSession(s.id)}
-                                    className={`w-full flex items-start gap-2 px-4 py-2.5 text-left text-xs border-b border-white/5 ${
-                                        sessionId === s.id ? "bg-purple-500/10" : colors.bgHover
+                                    className={`mx-2 mb-1 flex items-start gap-1 rounded-xl px-2 py-2 transition-colors ${
+                                        active
+                                            ? "bg-[var(--accent-muted)] border border-[rgba(45,212,191,0.25)]"
+                                            : isDark
+                                              ? "border border-transparent hover:bg-white/[0.04]"
+                                              : "border border-transparent hover:bg-slate-100/80"
                                     }`}
                                 >
-                                    <MessageSquare size={14} className="text-purple-400 shrink-0 mt-0.5" />
-                                    <div className="flex-1 min-w-0">
-                                        <p className={`${colors.textPrimary} line-clamp-2 font-medium`}>
-                                            {s.title || "New Chat"}
-                                        </p>
-                                        <p className={`${colors.textMuted} mt-0.5`}>
-                                            {s.updated_at || s.created_at
-                                                ? new Date(s.updated_at || s.created_at!).toLocaleString()
-                                                : ""}
-                                        </p>
-                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => loadSession(s.id)}
+                                        className="flex-1 flex items-start gap-2 min-w-0 text-left px-1 py-0.5"
+                                    >
+                                        <MessageSquare
+                                            size={14}
+                                            className={`shrink-0 mt-0.5 ${active ? "text-[var(--accent)]" : "text-[var(--foreground-muted)]"}`}
+                                        />
+                                        <div className="flex-1 min-w-0">
+                                            <p className={`${colors.textPrimary} line-clamp-2 text-xs font-medium leading-snug`}>
+                                                {s.title || "New Chat"}
+                                            </p>
+                                            <p className={`${colors.textMuted} mt-0.5 text-[10px]`}>
+                                                {s.updated_at || s.created_at
+                                                    ? new Date(s.updated_at || s.created_at!).toLocaleString()
+                                                    : ""}
+                                            </p>
+                                        </div>
+                                    </button>
                                     <button
                                         type="button"
                                         onClick={(e) => deleteSession(s.id, e)}
-                                        className="btn-ghost p-1 text-red-300 shrink-0"
+                                        className="btn-ghost p-1.5 text-rose-400/80 hover:text-rose-300 shrink-0 rounded-lg"
                                         aria-label="Delete chat"
                                     >
                                         <Trash2 size={12} />
                                     </button>
-                                </button>
-                            ))
-                        )}
-                    </div>
-
-                    {/* Document scope */}
-                    <div className={`px-4 py-3 border-b ${colors.borderPrimary}`}>
-                        <h2 className={`text-sm font-semibold ${colors.textPrimary}`}>Document scope</h2>
-                        <p className={`text-xs mt-0.5 ${colors.textMuted}`}>{scopeLabel}</p>
-                    </div>
-                    <div className="p-4 space-y-3 flex-1 overflow-y-auto">
-                        <label className="flex items-center gap-2 cursor-pointer text-sm">
-                            <input
-                                type="radio"
-                                name="chatScope"
-                                checked={chatScope === "all"}
-                                onChange={() => setChatScope("all")}
-                                className="accent-purple-500"
-                            />
-                            <span className={colors.textPrimary}>All documents</span>
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer text-sm">
-                            <input
-                                type="radio"
-                                name="chatScope"
-                                checked={chatScope === "selected"}
-                                onChange={() => setChatScope("selected")}
-                                className="accent-purple-500"
-                            />
-                            <span className={colors.textPrimary}>Selected only</span>
-                        </label>
-
-                        {chatScope === "selected" && (
-                            <div className="space-y-2 pt-1">
-                                <div className="relative">
-                                    <Search size={14} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${colors.textMuted}`} />
-                                    <input
-                                        value={docSearch}
-                                        onChange={(e) => setDocSearch(e.target.value)}
-                                        placeholder="Search filename…"
-                                        className="w-full premium-input rounded-lg py-2 pl-8 pr-3 text-xs"
-                                    />
                                 </div>
-                                <select
-                                    value={docStatusFilter}
-                                    onChange={(e) => setDocStatusFilter(e.target.value as DocStatusFilter)}
-                                    className="w-full premium-input rounded-lg py-2 px-3 text-xs"
-                                >
-                                    <option value="">All statuses</option>
-                                    <option value="ready">Ready</option>
-                                    <option value="processing">Processing</option>
-                                    <option value="failed">Failed</option>
-                                </select>
-                                <div className="flex gap-2">
-                                    <button type="button" onClick={selectAllFiltered} className="btn-secondary rounded-lg px-2 py-1 text-[10px] flex-1">
-                                        Select all ({filteredDocs.length})
-                                    </button>
-                                    <button type="button" onClick={clearSelection} className="btn-ghost rounded-lg px-2 py-1 text-[10px] flex-1">
-                                        Clear
-                                    </button>
-                                </div>
-                                <p className={`text-[10px] ${colors.textMuted}`}>
-                                    {selectedDocIds.length} of {filteredDocs.length} shown selected
-                                </p>
-                                {filteredDocs.length === 0 ? (
-                                    <p className={`text-xs ${colors.textMuted}`}>
-                                        No matching processed documents.
-                                    </p>
-                                ) : (
-                                    filteredDocs.map((doc) => {
-                                        const checked = selectedDocIds.includes(doc.documentId);
-                                        return (
-                                            <button
-                                                key={doc.documentId}
-                                                type="button"
-                                                onClick={() => toggleDoc(doc.documentId)}
-                                                className={`w-full flex items-start gap-2 rounded-lg px-2 py-2 text-left text-xs ${colors.bgHover}`}
-                                            >
-                                                {checked ? (
-                                                    <CheckSquare size={14} className="text-purple-400 shrink-0 mt-0.5" />
-                                                ) : (
-                                                    <Square size={14} className={`${colors.textMuted} shrink-0 mt-0.5`} />
-                                                )}
-                                                <span className={`${colors.textSecondary} line-clamp-2`}>
-                                                    {doc.originalFilename}
-                                                    <span className={`block text-[10px] ${colors.textMuted}`}>{doc.status}</span>
-                                                </span>
-                                            </button>
-                                        );
-                                    })
-                                )}
-                                {unprocessedCount > 0 && (
-                                    <p className={`text-[10px] ${colors.textMuted} pt-1`}>
-                                        {unprocessedCount} document(s) not yet processed by AI are hidden.
-                                    </p>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                </aside>
-            )}
+                            );
+                        })
+                    )}
+                </div>
+            </aside>
 
-            <div className="flex-1 min-w-0 flex flex-col max-w-4xl mx-auto w-full">
-                <div className={`px-6 lg:px-8 py-5 border-b ${colors.borderPrimary} shrink-0 flex items-center gap-3`}>
+            <div className="flex-1 min-w-0 flex flex-col bg-gradient-to-br from-transparent via-teal-500/[0.02] to-cyan-500/[0.04]">
+                <div className="px-3 sm:px-6 lg:px-8 py-3 sm:py-4 border-b border-[var(--border)] shrink-0 flex flex-wrap items-center gap-2 sm:gap-3">
                     <button
                         type="button"
                         onClick={() => setSidebarOpen((o) => !o)}
-                        className="btn-ghost rounded-lg p-2"
-                        aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+                        className="btn-ghost rounded-lg p-2.5 min-h-11 min-w-11 flex items-center justify-center"
+                        aria-label={sidebarOpen ? "Hide chats" : "Show chats"}
                     >
-                        {sidebarOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+                        {sidebarOpen && isLg ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
                     </button>
                     <div
-                        className={`h-10 w-10 rounded-xl flex items-center justify-center ${
-                            isDark ? "bg-purple-500/15 text-purple-300" : "bg-purple-100 text-purple-700"
+                        className={`h-9 w-9 sm:h-10 sm:w-10 rounded-xl flex items-center justify-center shrink-0 ${
+                            isDark ? "bg-teal-500/15 text-teal-300" : "bg-teal-100 text-teal-700"
                         }`}
                     >
                         <Sparkles size={18} />
                     </div>
                     <div className="flex-1 min-w-0">
-                        <h1 className={`text-xl font-bold ${colors.textPrimary}`}>AI Chat</h1>
-                        <p className={`text-sm ${colors.textMuted} truncate`}>{scopeLabel}</p>
+                        <h1 className={`text-base sm:text-xl font-bold tracking-tight ${colors.textPrimary}`}>AI Chat</h1>
+                        <p className={`text-xs sm:text-sm ${colors.textMuted} truncate hidden sm:block`}>
+                            Ask questions across your document library
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setScopePanelOpen(true)}
+                        className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] hover:border-[rgba(45,212,191,0.4)] hover:bg-[var(--accent-muted)] px-3 py-2 text-xs sm:text-sm transition-colors min-h-10"
+                    >
+                        <FileText size={14} className="text-[var(--accent)] shrink-0" />
+                        <span className={`${colors.textPrimary} font-medium truncate max-w-[100px] sm:max-w-[220px]`}>
+                            {scopeLabel}
+                        </span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={startNewChat}
+                        className="hidden sm:inline-flex btn-secondary rounded-xl px-3 py-2 text-xs sm:text-sm items-center gap-1.5 shrink-0"
+                    >
+                        <Plus size={14} /> New chat
+                    </button>
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                    <div className="max-w-3xl mx-auto w-full px-4 sm:px-6 py-6 space-y-4 min-h-full flex flex-col">
+                        {isWelcomeOnly ? (
+                            <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-12 animate-fade-in-up">
+                                <div className="h-14 w-14 rounded-2xl bg-[var(--accent-muted)] border border-[rgba(45,212,191,0.25)] flex items-center justify-center text-[var(--accent)] mb-4">
+                                    <Sparkles size={26} />
+                                </div>
+                                <h2 className={`text-xl font-bold tracking-tight ${colors.textPrimary}`}>
+                                    Ask your documents
+                                </h2>
+                                <p className={`text-sm mt-2 max-w-md ${colors.textMuted} leading-relaxed`}>
+                                    Summaries, fields, comparisons — scoped to all files or a selection you choose.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={() => setScopePanelOpen(true)}
+                                    className="mt-5 btn-secondary rounded-full px-4 py-2 text-sm inline-flex items-center gap-2"
+                                >
+                                    <FileText size={14} className="text-[var(--accent)]" />
+                                    {scopeLabel}
+                                </button>
+                            </div>
+                        ) : (
+                            messages.map((msg) => (
+                                <div
+                                    key={msg.id}
+                                    className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                                >
+                                    <div
+                                        className={`max-w-[90%] sm:max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                                            msg.role === "user"
+                                                ? "btn-gradient shadow-lg"
+                                                : `bg-[var(--surface)] border border-[var(--border)] shadow-sm ${colors.textPrimary}`
+                                        }`}
+                                    >
+                                        {msg.role === "assistant" ? (
+                                            <div className={`prose prose-sm max-w-none ${isDark ? "prose-invert" : "prose-slate"}`}>
+                                                <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                                {msg.citations && msg.citations.length > 0 && (
+                                                    <div className={`mt-3 pt-3 border-t ${colors.borderPrimary} not-prose`}>
+                                                        <p className={`text-[10px] font-semibold uppercase tracking-wider mb-2 ${colors.textMuted}`}>
+                                                            Sources
+                                                        </p>
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {msg.citations.map((c, i) => {
+                                                                const label = c.filename || c.documentId || "Source";
+                                                                const href = c.documentId
+                                                                    ? `/documents/${c.documentId}`
+                                                                    : null;
+                                                                const chipClass = `inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1 border transition-colors ${
+                                                                    isDark
+                                                                        ? "bg-white/5 border-white/10 text-slate-200 hover:border-teal-400/40 hover:bg-teal-500/10"
+                                                                        : "bg-slate-100 border-slate-200 text-slate-700 hover:border-teal-400 hover:bg-teal-50"
+                                                                }`;
+
+                                                                if (href) {
+                                                                    return (
+                                                                        <Link
+                                                                            key={`${c.documentId || c.filename}-${i}`}
+                                                                            href={href}
+                                                                            className={chipClass}
+                                                                            title={`Open preview: ${label}`}
+                                                                        >
+                                                                            <FileText size={11} className="shrink-0 opacity-70" />
+                                                                            <span className="truncate max-w-[180px]">{label}</span>
+                                                                        </Link>
+                                                                    );
+                                                                }
+
+                                                                return (
+                                                                    <span
+                                                                        key={`${c.documentId || c.filename}-${i}`}
+                                                                        className={chipClass}
+                                                                        title={label}
+                                                                    >
+                                                                        <FileText size={11} className="shrink-0 opacity-70" />
+                                                                        <span className="truncate max-w-[180px]">{label}</span>
+                                                                    </span>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            msg.content
+                                        )}
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                        <div ref={bottomRef} />
                     </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto px-6 lg:px-8 py-6 space-y-4">
-                    {messages.map((msg) => (
-                        <div
-                            key={msg.id}
-                            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                <div className="px-4 sm:px-6 lg:px-8 py-4 border-t border-[var(--border)] shrink-0 bg-gradient-to-t from-[var(--surface)] via-[var(--surface)]/90 to-transparent">
+                    <div className="max-w-3xl mx-auto w-full space-y-2">
+                        <button
+                            type="button"
+                            onClick={() => setScopePanelOpen(true)}
+                            className={`text-[11px] ${colors.textMuted} hover:text-[var(--accent)] inline-flex items-center gap-1.5 transition-colors`}
                         >
-                            <div
-                                className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                                    msg.role === "user"
-                                        ? "btn-gradient shadow-lg"
-                                        : `glass ${colors.textPrimary}`
-                                }`}
-                            >
-                                {msg.role === "assistant" ? (
-                                    <div className="prose prose-invert prose-sm max-w-none">
-                                        <ReactMarkdown>{msg.content}</ReactMarkdown>
-                                        {msg.citations && msg.citations.length > 0 && (
-                                            <div className={`mt-3 pt-3 border-t ${colors.borderPrimary} not-prose`}>
-                                                <p className={`text-[10px] font-semibold uppercase tracking-wider mb-2 ${colors.textMuted}`}>
-                                                    Sources
-                                                </p>
-                                                <div className="flex flex-wrap gap-1.5">
-                                                    {msg.citations.map((c, i) => (
-                                                        <span
-                                                            key={`${c.documentId || c.filename}-${i}`}
-                                                            className={`inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1 border ${
-                                                                isDark
-                                                                    ? "bg-white/5 border-white/10 text-slate-200"
-                                                                    : "bg-slate-100 border-slate-200 text-slate-700"
-                                                            }`}
-                                                            title={c.filename || c.documentId}
-                                                        >
-                                                            <FileText size={11} className="shrink-0 opacity-70" />
-                                                            <span className="truncate max-w-[180px]">{c.filename || c.documentId}</span>
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                ) : (
-                                    msg.content
-                                )}
-                            </div>
-                        </div>
-                    ))}
-                    <div ref={bottomRef} />
-                </div>
-
-                <div className={`px-6 lg:px-8 py-5 border-t ${colors.borderPrimary} shrink-0 bg-black/20`}>
-                    <ChatComposer
-                        value={input}
-                        onChange={setInput}
-                        onSend={send}
-                        sending={sending}
-                        placeholder={
-                            chatScope === "selected" && !selectedDocIds.length
-                                ? "Select documents in the scope panel…"
-                                : "Ask about your documents…"
-                        }
-                    />
+                            <FileText size={11} />
+                            Searching: {scopeLabel}
+                        </button>
+                        <ChatComposer
+                            value={input}
+                            onChange={setInput}
+                            onSend={send}
+                            sending={sending}
+                            placeholder={
+                                chatScope === "selected" && !selectedDocIds.length
+                                    ? "Select documents in scope first…"
+                                    : "Ask about your documents…"
+                            }
+                        />
+                    </div>
                 </div>
             </div>
+
+            <ChatScopePanel
+                open={scopePanelOpen}
+                onClose={() => setScopePanelOpen(false)}
+                chatScope={chatScope}
+                onChatScopeChange={setChatScope}
+                filteredDocs={filteredDocs}
+                selectedDocIds={selectedDocIds}
+                onToggleDoc={toggleDoc}
+                onSelectAll={selectAllFiltered}
+                onClearSelection={clearSelection}
+                docSearch={docSearch}
+                onDocSearchChange={setDocSearch}
+                docStatusFilter={docStatusFilter}
+                onDocStatusFilterChange={setDocStatusFilter}
+                unprocessedCount={unprocessedCount}
+                libraryCount={libraryDocs.length}
+                selectableCount={selectableDocs.length}
+                textPrimary={colors.textPrimary}
+                textMuted={colors.textMuted}
+                textSecondary={colors.textSecondary}
+                bgHover={colors.bgHover}
+            />
         </div>
     );
 }

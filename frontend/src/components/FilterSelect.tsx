@@ -109,8 +109,8 @@ export default function FilterSelect({
                           transform: pos.openUp ? "translateY(-100%)" : undefined,
                       }}
                       className={cn(
-                          "rounded-xl border border-white/15 py-1.5 max-h-60 overflow-y-auto shadow-2xl",
-                          "bg-[#0b1220] text-slate-100"
+                          "rounded-xl border border-[var(--border-strong)] py-1.5 max-h-60 overflow-y-auto shadow-2xl",
+                          "bg-[var(--surface-2)] text-[var(--foreground)]"
                       )}
                   >
                       {options.map((opt) => {
@@ -126,12 +126,12 @@ export default function FilterSelect({
                                       className={cn(
                                           "w-full text-left px-3.5 py-2.5 text-sm flex items-center justify-between gap-2 transition-colors",
                                           active
-                                              ? "bg-indigo-500/25 text-white"
-                                              : "text-slate-200 hover:bg-white/10 hover:text-white"
+                                              ? "bg-[var(--accent-muted)] text-[var(--accent)]"
+                                              : "text-[var(--foreground-secondary)] hover:bg-[var(--accent-muted)] hover:text-[var(--foreground)]"
                                       )}
                                   >
                                       <span className="truncate">{opt.label}</span>
-                                      {active && <Check size={14} className="text-indigo-300 shrink-0" />}
+                                      {active && <Check size={14} className="text-[var(--accent)] shrink-0" />}
                                   </button>
                               </li>
                           );
@@ -144,7 +144,7 @@ export default function FilterSelect({
     return (
         <div ref={rootRef} className={cn("flex flex-col gap-1", className)}>
             {!hideLabel && label && (
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 ml-0.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--foreground-muted)] ml-0.5">
                     {label}
                 </span>
             )}
@@ -156,7 +156,7 @@ export default function FilterSelect({
                     className={cn(
                         "premium-input w-full rounded-xl py-2.5 pl-3 pr-9 text-sm text-left",
                         "flex items-center justify-between gap-2",
-                        open && "border-indigo-400/50 ring-2 ring-indigo-500/20"
+                        open && "border-[var(--accent)] ring-[3px] ring-[var(--accent-ring)]"
                     )}
                     aria-haspopup="listbox"
                     aria-expanded={open}
@@ -166,7 +166,7 @@ export default function FilterSelect({
                     <ChevronDown
                         size={14}
                         className={cn(
-                            "absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 transition-transform shrink-0",
+                            "absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--foreground-muted)] transition-transform shrink-0",
                             open && "rotate-180"
                         )}
                     />

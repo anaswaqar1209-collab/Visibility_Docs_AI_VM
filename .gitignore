@@ -4,6 +4,8 @@ __pycache__/
 node_modules/
 .next/
 .env
+.env.*
+!.env.example.safe
 venv/
 .venv/
 *.egg-info/
@@ -11,4 +13,10 @@ dist/
 build/
 .DS_Store
 .env.local
+.env.example
+**/.env.example
+ai-backend/.env
+ai-backend/.env.example
 uploads/
+shared-storage/
+

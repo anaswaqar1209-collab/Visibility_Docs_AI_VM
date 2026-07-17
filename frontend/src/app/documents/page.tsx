@@ -3,12 +3,13 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-    FileText, Upload, Trash2, RefreshCw, Eye, Search, FolderUp, Copy, X, Loader2, Info,
+    FileText, Upload, Trash2, RefreshCw, Eye, Search, FolderUp, Copy, X, Loader2, Info, Filter,
 } from "lucide-react";
 import ClientLayout from "@/components/ClientLayout";
 import FilterSelect from "@/components/FilterSelect";
 import ClassifyAgentPopup from "@/components/ClassifyAgentPopup";
 import LibraryPagination from "@/components/LibraryPagination";
+import { PageHeader, EmptyState } from "@/components/ui";
 import { useTheme } from "@/context/ColorContext";
 import { apiRequest } from "@/lib/apiClient";
 import { AGENT_FILTER_OPTIONS, AGENT_OPTIONS, agentLabel, resolveDocAgent } from "@/lib/documentAgents";
@@ -73,18 +74,18 @@ function formatBytes(n: number) {
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function statusBadge(status: string, isDark: boolean) {
+function statusBadge(status: string, _isDark: boolean) {
     const s = status.toLowerCase();
-    if (s === "ready" || s === "processed" || s === "completed") {
-        return isDark ? "bg-green-500/15 text-green-300 border-green-500/25" : "bg-green-100 text-green-700 border-green-200";
+    if (s === "ready" || s === "processed" || s === "completed" || s === "complete" || s === "done") {
+        return "bg-[var(--success-muted)] text-[var(--success)] border-[rgba(52,211,153,0.25)]";
     }
-    if (s === "processing" || s === "uploaded") {
-        return isDark ? "bg-amber-500/15 text-amber-300 border-amber-500/25" : "bg-amber-100 text-amber-700 border-amber-200";
+    if (s === "processing" || s === "uploaded" || s === "queued" || s === "uploading") {
+        return "bg-[var(--warning-muted)] text-[var(--warning)] border-[rgba(251,191,36,0.25)]";
     }
     if (s === "failed" || s.includes("fail") || s.includes("error")) {
-        return isDark ? "bg-red-500/15 text-red-300 border-red-500/25" : "bg-red-100 text-red-700 border-red-200";
+        return "bg-[var(--error-muted)] text-[var(--error)] border-[rgba(248,113,113,0.25)]";
     }
-    return isDark ? "bg-slate-500/15 text-slate-300 border-slate-500/25" : "bg-slate-100 text-slate-600 border-slate-200";
+    return "bg-[var(--surface-3)] text-[var(--foreground-muted)] border-[var(--border)]";
 }
 
 const IN_PROGRESS_AI = ["queued", "running", "processing", "ocr", "classify", "extract", "embed", "uploaded", "pending"];
@@ -150,6 +151,7 @@ function DocumentsContent() {
     const [preferredAgent, setPreferredAgent] = useState("");
     const [classifyQueue, setClassifyQueue] = useState<ClassifyQueueItem[]>([]);
     const [toast, setToast] = useState<string | null>(null);
+    const [filtersOpen, setFiltersOpen] = useState(false);
 
     const activeSort = SORT_PRESETS.find((s) => s.value === sortPreset) || SORT_PRESETS[0];
 
@@ -413,26 +415,32 @@ function DocumentsContent() {
         }
     };
 
-    const showStaging = pendingFiles.length > 0 || queueItems.length > 0;
     const allowUpload = canUpload();
     const allowView = canViewDocs();
     const allowDelete = canDeleteDocs();
+    const showStaging = pendingFiles.length > 0 || queueItems.length > 0;
+    const hasActiveFilters = Boolean(scoreFilter || agentFilter || sortPreset !== "newest");
 
     return (
-        <div ref={containerRef} tabIndex={0} className="p-6 lg:p-8 space-y-6 max-w-6xl mx-auto outline-none">
-            <div>
-                <h1 className={`text-2xl font-bold tracking-tight ${colors.textPrimary}`}>Documents</h1>
-                <p className={`text-sm mt-1 ${colors.textMuted}`}>
-                    {allowUpload
+        <div ref={containerRef} tabIndex={0} className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-6xl mx-auto outline-none animate-fade-in-up">
+            <PageHeader
+                title="Documents"
+                subtitle={
+                    allowUpload
                         ? "Add files to queue, review, then upload. Files go to server then AI model automatically."
-                        : "Browse documents available to your account."}
-                </p>
-                {allowView && (
-                    <Link href="/documents/details" className="inline-flex mt-2 text-sm text-purple-300 hover:underline">
-                        View all file details & processing status →
-                    </Link>
-                )}
-            </div>
+                        : "Browse documents available to your account."
+                }
+                // actions={
+                //     allowView ? (
+                //         <Link
+                //             href="/documents/details"
+                //             className="text-sm font-medium text-[var(--accent)] hover:underline underline-offset-4"
+                //         >
+                //             View all file details →
+                //         </Link>
+                //     ) : undefined
+                // }
+            />
 
             {!allowUpload && !allowView && (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-200 px-4 py-3 text-sm">
@@ -445,10 +453,10 @@ function DocumentsContent() {
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={onDrop}
-                className={`glass rounded-2xl p-8 border-2 border-dashed transition-all ${dragOver ? "border-blue-500/60 bg-blue-500/5" : isDark ? "border-white/15" : "border-slate-300"}`}
+                className={`surface-card p-8 border-2 border-dashed transition-all ${dragOver ? "border-[var(--accent)] bg-[var(--accent-muted)]" : "border-[var(--border-strong)]"}`}
             >
                 <div className="flex flex-col items-center text-center gap-3">
-                    <div className={`h-14 w-14 rounded-2xl flex items-center justify-center ${isDark ? "bg-blue-500/15 text-blue-300" : "bg-blue-100 text-blue-600"}`}>
+                    <div className="h-14 w-14 rounded-2xl flex items-center justify-center bg-[var(--accent-muted)] text-[var(--accent)] border border-[rgba(45,212,191,0.25)]">
                         <Upload size={24} />
                     </div>
                     <p className={`font-semibold ${colors.textPrimary}`}>
@@ -509,7 +517,7 @@ function DocumentsContent() {
             )}
 
             {allowUpload && showStaging && (
-                <div className="glass rounded-2xl overflow-visible">
+                <div className="surface-card overflow-visible">
                     <div className={`px-5 py-4 border-b ${colors.borderPrimary} flex flex-wrap items-center justify-between gap-3`}>
                         <div>
                             <h2 className={`text-sm font-semibold ${colors.textPrimary}`}>
@@ -544,7 +552,7 @@ function DocumentsContent() {
                             <select
                                 value={preferredAgent}
                                 onChange={(e) => setPreferredAgent(e.target.value)}
-                                className="premium-input rounded-xl py-2.5 px-3 text-sm min-w-[240px]"
+                                className="premium-input rounded-xl py-2.5 px-3 text-sm w-full sm:min-w-[240px]"
                             >
                                 {AGENT_OPTIONS.map((o) => (
                                     <option key={o.value || "auto"} value={o.value}>{o.label}</option>
@@ -552,7 +560,7 @@ function DocumentsContent() {
                             </select>
                         </div>
                     )}
-                    <ul className="divide-y divide-white/5">
+                    <ul className="divide-y divide-[var(--border)]">
                         {(queueItems.length ? queueItems : pendingFiles.map((p) => ({
                             id: p.id,
                             name: p.file.name,
@@ -598,12 +606,14 @@ function DocumentsContent() {
             {error && <div className="rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 px-4 py-3 text-sm">{error}</div>}
 
             {allowView && (
-            <div className="glass rounded-2xl">
+            <div className="surface-card">
                 <div className={`px-5 py-4 border-b ${colors.borderPrimary} flex flex-wrap items-center justify-between gap-3`}>
                     <div className="flex items-center gap-2">
-                        <FileText size={16} className={colors.textMuted} />
+                        <div className="h-8 w-8 rounded-lg bg-[var(--accent-muted)] text-[var(--accent)] flex items-center justify-center">
+                            <FileText size={15} />
+                        </div>
                         <h2 className={`text-sm font-semibold ${colors.textPrimary}`}>Library</h2>
-                        <span className={`text-xs ${colors.textMuted}`}>({pagination.total})</span>
+                        <span className={`text-xs font-mono ${colors.textMuted}`}>({pagination.total})</span>
                     </div>
                     <button type="button" onClick={load} className="btn-secondary rounded-xl px-3 py-2 text-sm flex items-center gap-2">
                         <RefreshCw size={14} /> Refresh
@@ -630,30 +640,50 @@ function DocumentsContent() {
                             >
                                 Search
                             </button>
+                            <button
+                                type="button"
+                                onClick={() => setFiltersOpen((v) => !v)}
+                                className={`rounded-xl px-4 text-sm font-medium h-[44px] shrink-0 inline-flex items-center justify-center gap-2 border transition-colors ${
+                                    filtersOpen || hasActiveFilters
+                                        ? "bg-[var(--accent-muted)] border-[rgba(45,212,191,0.35)] text-[var(--accent)]"
+                                        : "btn-secondary"
+                                }`}
+                                aria-expanded={filtersOpen}
+                            >
+                                <Filter size={15} />
+                                Filters
+                                {hasActiveFilters && (
+                                    <span className="h-5 min-w-5 px-1 rounded-full bg-[var(--accent)] text-[#042f2e] text-[10px] font-bold flex items-center justify-center">
+                                        {[scoreFilter, agentFilter, sortPreset !== "newest"].filter(Boolean).length}
+                                    </span>
+                                )}
+                            </button>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            <FilterSelect
-                                label="Score"
-                                value={scoreFilter}
-                                onChange={(v) => { setScoreFilter(v); setPage(1); }}
-                                options={SCORE_FILTER_OPTIONS}
-                                minWidth="w-full"
-                            />
-                            <FilterSelect
-                                label="Sort"
-                                value={sortPreset}
-                                onChange={(v) => { setSortPreset(v); setPage(1); }}
-                                options={SORT_PRESETS.map((s) => ({ value: s.value, label: s.label }))}
-                                minWidth="w-full"
-                            />
-                            <FilterSelect
-                                label="Agent"
-                                value={agentFilter}
-                                onChange={(v) => { setAgentFilter(v); setPage(1); }}
-                                options={AGENT_FILTER_OPTIONS}
-                                minWidth="w-full"
-                            />
-                        </div>
+                        {filtersOpen && (
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 animate-fade-in-up">
+                                <FilterSelect
+                                    label="Score"
+                                    value={scoreFilter}
+                                    onChange={(v) => { setScoreFilter(v); setPage(1); }}
+                                    options={SCORE_FILTER_OPTIONS}
+                                    minWidth="w-full"
+                                />
+                                <FilterSelect
+                                    label="Sort"
+                                    value={sortPreset}
+                                    onChange={(v) => { setSortPreset(v); setPage(1); }}
+                                    options={SORT_PRESETS.map((s) => ({ value: s.value, label: s.label }))}
+                                    minWidth="w-full"
+                                />
+                                <FilterSelect
+                                    label="Agent"
+                                    value={agentFilter}
+                                    onChange={(v) => { setAgentFilter(v); setPage(1); }}
+                                    options={AGENT_FILTER_OPTIONS}
+                                    minWidth="w-full"
+                                />
+                            </div>
+                        )}
                     </div>
                     {(scoreFilter || agentFilter || sortPreset !== "newest" || q) && (
                         <div className="flex flex-wrap items-center gap-2 mt-3">
@@ -691,7 +721,7 @@ function DocumentsContent() {
                                     setSortPreset("newest");
                                     setPage(1);
                                 }}
-                                className={`text-[11px] ${colors.textMuted} hover:text-white underline-offset-2 hover:underline`}
+                                className={`text-[11px] ${colors.textMuted} hover:text-[var(--accent)] underline-offset-2 hover:underline`}
                             >
                                 Clear filters
                             </button>
@@ -703,16 +733,20 @@ function DocumentsContent() {
                 {loading ? (
                     <div className={`p-8 text-sm ${colors.textMuted}`}>Loading…</div>
                 ) : filteredDocs.length === 0 ? (
-                    <div className={`p-8 text-sm ${colors.textMuted}`}>No documents found.</div>
+                    <EmptyState
+                        icon={<FileText size={22} />}
+                        title="No documents found"
+                        description="Upload files above or adjust your filters to see documents here."
+                    />
                 ) : (
-                    <ul className="divide-y divide-white/5">
+                    <ul className="divide-y divide-[var(--border)]">
                         {filteredDocs.map((doc) => {
                             const { label: displayStatus, isProcessing } = getDisplayStatus(doc);
                             return (
-                            <li key={doc.documentId} className={`px-5 py-4 flex flex-wrap items-center justify-between gap-3 ${colors.bgHover}`}>
+                            <li key={doc.documentId} className={`px-4 sm:px-5 py-4 flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-3 ${colors.bgHover}`}>
                                 <div className="min-w-0 flex-1">
                                     <div className="flex items-center gap-2 flex-wrap">
-                                        <p className={`font-medium truncate ${colors.textPrimary}`}>{doc.originalFilename}</p>
+                                        <p className={`font-medium truncate min-w-0 ${colors.textPrimary}`}>{doc.originalFilename}</p>
                                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase border ${statusBadge(displayStatus, isDark)}`}>
                                             {isProcessing && <Loader2 size={10} className="animate-spin" />}
                                             {displayStatus}
@@ -724,7 +758,7 @@ function DocumentsContent() {
                                         )}
                                     </div>
                                     <p className={`text-xs mt-1 ${colors.textMuted}`}>
-                                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase mr-2 ${isDark ? "bg-blue-500/15 text-blue-300" : "bg-blue-100 text-blue-700"}`}>
+                                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase mr-2 bg-[var(--accent-muted)] text-[var(--accent)] border border-[rgba(45,212,191,0.2)]`}>
                                             {getFileTypeLabel(doc.mimeType, doc.originalFilename)}
                                         </span>
                                         {formatBytes(doc.sizeBytes)} · {new Date(doc.createdAt).toLocaleString()}
@@ -746,20 +780,20 @@ function DocumentsContent() {
                                         <p className="text-xs text-red-400 mt-1">{doc.aiErrorMessage}</p>
                                     )}
                                 </div>
-                                <div className="flex gap-2 flex-wrap">
+                                <div className="flex gap-2 flex-wrap w-full sm:w-auto">
                                     {allowView && (
-                                        <Link href={`/documents/details?doc=${doc.documentId}`} className="btn-secondary rounded-lg px-3 py-2 text-sm flex items-center gap-1.5">
+                                        <Link href={`/documents/details?doc=${doc.documentId}`} className="btn-secondary rounded-lg px-3 py-2 text-sm flex items-center justify-center gap-1.5 flex-1 sm:flex-initial min-h-10">
                                             <Info size={14} /> Details
                                         </Link>
                                     )}
                                     {allowView && (
-                                        <Link href={`/documents/${doc.documentId}`} className="btn-secondary rounded-lg px-3 py-2 text-sm flex items-center gap-1.5">
+                                        <Link href={`/documents/${doc.documentId}`} className="btn-secondary rounded-lg px-3 py-2 text-sm flex items-center justify-center gap-1.5 flex-1 sm:flex-initial min-h-10">
                                             <Eye size={14} /> Preview
                                         </Link>
                                     )}
                                     {allowDelete && (
                                         <button type="button" onClick={() => remove(doc.documentId, doc.originalFilename)}
-                                            className="btn-ghost rounded-lg px-3 py-2 text-sm flex items-center gap-1.5 text-red-300">
+                                            className="btn-ghost rounded-lg px-3 py-2 text-sm flex items-center justify-center gap-1.5 text-red-300 min-h-10">
                                             <Trash2 size={14} /> Delete
                                         </button>
                                     )}

@@ -32,31 +32,31 @@ export default function ClassifyAgentPopup({ doc, queueLen = 1, defaultAgent, on
             onClick={onDismiss}
         >
             <div
-                className="glass rounded-2xl w-full max-w-md p-6 space-y-4 border border-white/10"
+                className="surface-card p-4 sm:p-6 space-y-4 border border-[var(--border)] w-full max-w-md"
                 onClick={(e) => e.stopPropagation()}
             >
                 <div>
                     <div className="flex items-center gap-2">
-                        <h3 className="text-lg font-bold text-white">Classification result</h3>
+                        <h3 className="text-lg font-bold text-[var(--foreground)]">Classification result</h3>
                         {queueLen > 1 && (
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-200">
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-200">
                                 1 of {queueLen}
                             </span>
                         )}
                     </div>
-                    <p className="text-sm text-slate-400 mt-1 truncate">
+                    <p className="text-sm text-[var(--foreground-muted)] mt-1 truncate">
                         {doc.originalFilename || doc.title || "Document"}
                     </p>
                 </div>
 
-                <div className="rounded-xl p-4 bg-indigo-500/10 border border-indigo-500/20">
-                    <p className="text-xs font-semibold text-indigo-300 uppercase tracking-wider">Detected type</p>
-                    <p className="text-lg font-bold text-white mt-1">{docType}</p>
-                    <p className="text-xs text-slate-400 mt-1">Suggested agent: {agentLabel(suggested)}</p>
+                <div className="rounded-xl p-4 bg-teal-500/10 border border-teal-500/20">
+                    <p className="text-xs font-semibold text-teal-300 uppercase tracking-wider">Detected type</p>
+                    <p className="text-lg font-bold text-[var(--foreground)] mt-1">{docType}</p>
+                    <p className="text-xs text-[var(--foreground-muted)] mt-1">Suggested agent: {agentLabel(suggested)}</p>
                 </div>
 
                 <div>
-                    <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                    <label className="text-xs font-semibold text-[var(--foreground-muted)] uppercase tracking-wider block mb-2">
                         Extraction agent
                     </label>
                     <select

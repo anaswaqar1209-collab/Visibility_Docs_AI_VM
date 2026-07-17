@@ -64,37 +64,37 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     const iconColors: Record<ToastType, string> = isLightTheme
         ? {
             success: "text-emerald-700",
-            error: "text-red-700",
-            info: "text-blue-700",
+            error: "text-rose-700",
+            info: "text-teal-700",
         }
         : {
             success: "text-emerald-300",
-            error: "text-red-300",
-            info: "text-blue-300",
+            error: "text-rose-300",
+            info: "text-teal-300",
         };
 
     const bgColors: Record<ToastType, string> = isLightTheme
         ? {
             success: "bg-emerald-50 border-emerald-200 border-l-[4px] border-l-emerald-600",
-            error: "bg-red-50 border-red-200 border-l-[4px] border-l-red-600",
-            info: "bg-blue-50 border-blue-200 border-l-[4px] border-l-blue-600",
+            error: "bg-rose-50 border-rose-200 border-l-[4px] border-l-rose-600",
+            info: "bg-teal-50 border-teal-200 border-l-[4px] border-l-teal-600",
         }
         : {
-            success: "bg-emerald-500/10 border-emerald-500/20 border-l-[1px] border-l-emerald-500/20",
-            error: "bg-red-500/10 border-red-500/20 border-l-[1px] border-l-red-500/20",
-            info: "bg-blue-500/10 border-blue-500/20 border-l-[1px] border-l-blue-500/20",
+            success: "bg-emerald-500/10 border-emerald-500/25 border-l-[3px] border-l-emerald-400",
+            error: "bg-rose-500/10 border-rose-500/25 border-l-[3px] border-l-rose-400",
+            info: "bg-teal-500/10 border-teal-500/25 border-l-[3px] border-l-teal-400",
         };
 
     const textColors: Record<ToastType, string> = isLightTheme
         ? {
             success: "text-emerald-900",
-            error: "text-red-900",
-            info: "text-blue-900",
+            error: "text-rose-900",
+            info: "text-teal-900",
         }
         : {
             success: "text-emerald-100",
-            error: "text-red-100",
-            info: "text-blue-100",
+            error: "text-rose-100",
+            info: "text-teal-100",
     };
 
     return (

@@ -102,7 +102,7 @@ function DocumentDetailsContent() {
     }, [isProcessing, analyzing, load]);
 
     return (
-        <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
+        <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
             <Link href="/documents" className={`inline-flex items-center gap-2 text-sm ${colors.textMuted} hover:text-white`}>
                 <ArrowLeft size={14} /> Back to library
             </Link>
@@ -115,7 +115,7 @@ function DocumentDetailsContent() {
             {error && <div className="text-red-300 text-sm">{error}</div>}
 
             {doc && (
-                <div className="glass rounded-2xl p-6">
+                <div className="surface-card p-6">
                     <DocumentDetailPanel
                         doc={doc}
                         ai={aiDoc}

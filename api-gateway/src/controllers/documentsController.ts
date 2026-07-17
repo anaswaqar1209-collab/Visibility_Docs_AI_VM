@@ -16,7 +16,9 @@ import {
     deleteDocumentFully,
     ensureUploadDir,
     saveUploadedFile,
+    applyDocumentTypeStorage,
 } from '../services/documentStorage';
+import { recordActivityFromReq } from '../services/activityLog';
 import {
     getAiDocument,
     getAiDocumentImages,
@@ -32,6 +34,7 @@ import {
 } from '../services/aiServiceClient';
 import { PERMISSIONS } from '../types/permissions';
 import { hasPermission } from '../services/accessScope';
+import logger from '../utils/logger';
 
 const SORT_FIELDS: Record<string, string> = {
     createdAt: 'createdAt',
@@ -67,9 +70,6 @@ async function syncStatusFromAiDocument(
         }
     } else if (PYTHON_DONE_STATUSES.some((s) => pyStatus.includes(s))) {
         doc.status = 'ready';
-        if (aiDoc.document_type) {
-            doc.classification = String(aiDoc.document_type);
-        }
         if (aiDoc.page_count != null) {
             doc.pageCount = Number(aiDoc.page_count) || 0;
         }
@@ -84,6 +84,16 @@ async function syncStatusFromAiDocument(
         }
     } else if (pyStatus) {
         doc.status = 'processing';
+    }
+
+    // Relocate as soon as AI knows the type (filename never decides the folder)
+    if (aiDoc.document_type) {
+        doc.classification = String(aiDoc.document_type);
+        try {
+            await applyDocumentTypeStorage(doc, String(aiDoc.document_type));
+        } catch (e: any) {
+            logger.warn(`Storage relocate failed for ${doc.documentId}: ${e.message}`);
+        }
     }
 
     return aiDoc;
@@ -216,6 +226,14 @@ export const streamDocument = (disposition: 'inline' | 'attachment') =>
                 'Content-Disposition',
                 `${disposition}; filename="${encodeURIComponent(doc.originalFilename)}"`
             );
+            recordActivityFromReq(req, {
+                action: disposition === 'inline' ? 'document.preview' : 'document.download',
+                category: 'document',
+                resourceType: 'document',
+                resourceId: doc.documentId,
+                message: `${disposition === 'inline' ? 'Previewed' : 'Downloaded'} ${doc.originalFilename}`,
+                metadata: { filename: doc.originalFilename },
+            });
             fs.createReadStream(doc.storagePath).pipe(res);
         } catch (error) {
             next(error);
@@ -235,12 +253,31 @@ export const uploadDocument = async (req: Request, res: Response, next: NextFunc
 
         const phase3Agent = ((req.body?.phase3Agent as string) || '').trim() || undefined;
         const { doc, aiModelResponse } = await saveUploadedFile(req.user, file, phase3Agent);
+        recordActivityFromReq(req, {
+            action: 'document.upload',
+            category: 'document',
+            resourceType: 'document',
+            resourceId: doc.documentId,
+            message: `Uploaded ${doc.originalFilename}`,
+            metadata: { filename: doc.originalFilename, mimeType: doc.mimeType },
+        });
         res.status(201).json({
             success: true,
             message: 'Document uploaded successfully',
             data: { document: doc, aiModelResponse },
         });
     } catch (error: any) {
+        if (error.statusCode === 429 || error.code === 'GROQ_RATE_LIMIT') {
+            return res.status(429).json({
+                success: false,
+                code: 'GROQ_RATE_LIMIT',
+                message: error.message || 'Groq rate limit reached',
+                ...(error.groq || {}),
+                console_url: error.groq?.console_url || 'https://console.groq.com/keys',
+                billing_url: error.groq?.billing_url || 'https://console.groq.com/settings/billing',
+                retry_after_seconds: error.groq?.retry_after_seconds || 24 * 3600,
+            });
+        }
         if (error.statusCode === 415) {
             return res.status(415).json({ success: false, message: error.message });
         }
@@ -270,8 +307,33 @@ export const uploadDocumentsBulk = async (req: Request, res: Response, next: Nex
                 const { doc } = await saveUploadedFile(req.user, file);
                 uploaded.push(doc);
             } catch (err: any) {
+                if (err.statusCode === 429 || err.code === 'GROQ_RATE_LIMIT') {
+                    return res.status(429).json({
+                        success: false,
+                        code: 'GROQ_RATE_LIMIT',
+                        message: err.message || 'Groq rate limit reached',
+                        ...(err.groq || {}),
+                        console_url: err.groq?.console_url || 'https://console.groq.com/keys',
+                        billing_url: err.groq?.billing_url || 'https://console.groq.com/settings/billing',
+                        retry_after_seconds: err.groq?.retry_after_seconds || 24 * 3600,
+                        data: { uploaded, failed },
+                    });
+                }
                 failed.push({ name: file.originalname, reason: err.message || 'Upload failed' });
             }
+        }
+
+        if (uploaded.length) {
+            recordActivityFromReq(req, {
+                action: 'document.upload.bulk',
+                category: 'document',
+                message: `Uploaded ${uploaded.length} file(s)${failed.length ? `, ${failed.length} failed` : ''}`,
+                metadata: {
+                    uploadedCount: uploaded.length,
+                    failedCount: failed.length,
+                    filenames: uploaded.map((d) => d.originalFilename),
+                },
+            });
         }
 
         res.status(uploaded.length ? 201 : 400).json({
@@ -393,6 +455,11 @@ export const updateDocumentAiSettings = async (req: Request, res: Response, next
             ...(doc.metadata || {}),
             phase3Agent: String(phase3Agent),
         };
+        try {
+            await applyDocumentTypeStorage(doc, String(documentType));
+        } catch (e: any) {
+            logger.warn(`Storage relocate failed for ${doc.documentId}: ${e?.message || e}`);
+        }
         await doc.save();
 
         res.json({
@@ -641,6 +708,14 @@ export const deleteDocument = async (req: Request, res: Response, next: NextFunc
         await deleteDocumentFully(doc.documentId, doc.storagePath, {
             pythonDocumentId: doc.pythonDocumentId,
             aiOrgId: resolveDocumentAiOrgId(doc, req.user),
+        });
+        recordActivityFromReq(req, {
+            action: 'document.delete',
+            category: 'document',
+            resourceType: 'document',
+            resourceId: doc.documentId,
+            message: `Deleted ${doc.originalFilename}`,
+            metadata: { filename: doc.originalFilename },
         });
         res.json({ success: true, message: 'Document and folder deleted' });
     } catch (error) {

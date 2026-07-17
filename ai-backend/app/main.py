@@ -12,10 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
-from .routers import documents, search, chat, auth, reports
+from .routers import documents, search, chat, auth, reports, groq_config
 from .auth_deps import get_current_user, get_optional_user
 from fastapi import Depends
 from .config import settings
+from .services.groq_service import GroqRateLimitExceeded
+from .services import groq_limit_state
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("visibility-docs")
@@ -87,8 +89,42 @@ async def validation_handler(request: Request, exc):
     return JSONResponse(status_code=422, content={"detail": str(exc.errors())})
 
 
+@app.exception_handler(GroqRateLimitExceeded)
+async def groq_rate_limit_handler(request: Request, exc: GroqRateLimitExceeded):
+    status = exc.status or groq_limit_state.status_payload()
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": str(exc),
+            "code": "GROQ_RATE_LIMIT",
+            "message": "Groq API rate limit reached. Enter a new API key or wait for the cooldown.",
+            "retry_after_seconds": status.get("retry_after_seconds"),
+            "until_ts": status.get("until_ts"),
+            "console_url": status.get("console_url") or "https://console.groq.com/keys",
+            "billing_url": status.get("billing_url") or "https://console.groq.com/settings/billing",
+            "model": status.get("model"),
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc):
+    # Some call sites catch loosely; still map RateLimit-looking errors
+    err = str(exc).lower()
+    if "rate_limit" in err or "rate limit" in err or "429" in err:
+        status = groq_limit_state.mark_limited(str(exc))
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": str(exc),
+                "code": "GROQ_RATE_LIMIT",
+                "message": "Groq API rate limit reached. Enter a new API key or wait for the cooldown.",
+                "retry_after_seconds": status.get("retry_after_seconds"),
+                "until_ts": status.get("until_ts"),
+                "console_url": "https://console.groq.com/keys",
+                "billing_url": "https://console.groq.com/settings/billing",
+            },
+        )
     logger.error(f"Unhandled error on {request.method} {request.url.path}: {exc}\n{traceback.format_exc()}")
     return JSONResponse(status_code=500, content={"detail": f"Internal server error: {str(exc)}"})
 
@@ -98,6 +134,7 @@ app.include_router(documents.router, dependencies=[Depends(get_optional_user)])
 app.include_router(search.router, dependencies=[Depends(get_optional_user)])
 app.include_router(chat.router, dependencies=[Depends(get_optional_user)])
 app.include_router(reports.router, dependencies=[Depends(get_current_user)])
+app.include_router(groq_config.router)
 
 
 @app.get("/", tags=["status"])

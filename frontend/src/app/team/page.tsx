@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Loader2, Plus, RefreshCw, UserCheck, UserX } from "lucide-react";
 import ClientLayout from "@/components/ClientLayout";
 import { useToast } from "@/components/Toast";
+import { PageHeader } from "@/components/ui";
 import { useTheme } from "@/context/ColorContext";
 import { apiRequest } from "@/lib/apiClient";
 import { enrichUserFromToken } from "@/lib/auth";
@@ -149,17 +150,17 @@ function TeamContent() {
     };
 
     return (
-        <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
-            <div className="flex justify-between items-center">
-                <div>
-                    <h1 className={`text-2xl font-bold ${colors.textPrimary}`}>Team</h1>
-                    <p className={`text-sm ${colors.textMuted}`}>Add members and set permissions</p>
-                </div>
-                <div className="flex gap-2">
-                    <button type="button" onClick={load} className="btn-secondary rounded-xl px-4 py-2 text-sm"><RefreshCw size={14} className="inline mr-1" />Refresh</button>
-                    <button type="button" onClick={() => setShowForm(!showForm)} className="btn-gradient rounded-xl px-4 py-2 text-sm" disabled={!hasOrganization}><Plus size={14} className="inline mr-1" />Add member</button>
-                </div>
-            </div>
+        <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-6 animate-fade-in-up">
+            <PageHeader
+                title="Team"
+                subtitle="Add members and set permissions"
+                actions={
+                    <div className="flex gap-2">
+                        <button type="button" onClick={load} className="btn-secondary rounded-xl px-4 py-2 text-sm"><RefreshCw size={14} className="inline mr-1" />Refresh</button>
+                        <button type="button" onClick={() => setShowForm(!showForm)} className="btn-gradient rounded-xl px-4 py-2 text-sm" disabled={!hasOrganization}><Plus size={14} className="inline mr-1" />Add member</button>
+                    </div>
+                }
+            />
 
             {!hasOrganization && (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 flex items-start gap-2">
@@ -177,7 +178,7 @@ function TeamContent() {
             {success && <div className="rounded-xl border border-green-500/30 bg-green-500/10 text-green-300 px-4 py-3 text-sm">{success}</div>}
 
             {showForm && hasOrganization && (
-                <form onSubmit={createMember} className="glass rounded-2xl p-6 space-y-4">
+                <form onSubmit={createMember} className="surface-card p-6 space-y-4">
                     <div className="flex flex-col gap-1">
                         <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 ml-0.5">Full name</span>
                         <input
@@ -224,22 +225,22 @@ function TeamContent() {
                 </form>
             )}
 
-            <div className="glass rounded-2xl overflow-hidden">
+            <div className="surface-card overflow-hidden">
                 {loading ? <div className={`p-8 text-sm ${colors.textMuted}`}>Loading…</div> : (
                     <ul className="divide-y divide-white/5">
                         {members.map((m) => (
                             <li key={m.userId} className="p-5 space-y-3">
                                 <div className="flex flex-wrap justify-between gap-3">
-                                    <div>
+                                    <div className="min-w-0 flex-1">
                                         <p className={`font-semibold ${colors.textPrimary}`}>{m.fullName}</p>
-                                        <p className={`text-sm ${colors.textMuted}`}>{m.email} · <span className={m.status === "active" ? "text-green-400" : "text-red-400"}>{m.status}</span></p>
+                                        <p className={`text-sm ${colors.textMuted} break-words`}>{m.email} · <span className={m.status === "active" ? "text-green-400" : "text-red-400"}>{m.status}</span></p>
                                     </div>
-                                    <div className="flex gap-2">
-                                        <button type="button" onClick={() => toggleStatus(m.userId, m.status)} className="btn-secondary rounded-lg px-3 py-2 text-sm">
+                                    <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                                        <button type="button" onClick={() => toggleStatus(m.userId, m.status)} className="btn-secondary rounded-lg px-3 py-2 text-sm min-h-10">
                                             {m.status === "active" ? <><UserX size={14} className="inline" /> Deactivate</> : <><UserCheck size={14} className="inline" /> Activate</>}
                                         </button>
-                                        <button type="button" onClick={() => openPermissions(m)} className="btn-secondary rounded-lg px-3 py-2 text-sm">Permissions</button>
-                                        <button type="button" onClick={() => removeMember(m.userId)} className="btn-ghost text-red-300 rounded-lg px-3 py-2 text-sm">Remove</button>
+                                        <button type="button" onClick={() => openPermissions(m)} className="btn-secondary rounded-lg px-3 py-2 text-sm min-h-10">Permissions</button>
+                                        <button type="button" onClick={() => removeMember(m.userId)} className="btn-ghost text-red-300 rounded-lg px-3 py-2 text-sm min-h-10">Remove</button>
                                     </div>
                                 </div>
                                 {editingPerms === m.userId && permDraft && (
@@ -255,7 +256,7 @@ function TeamContent() {
                                                 >
                                                     <input
                                                         type="checkbox"
-                                                        className="mt-0.5 accent-indigo-500"
+                                                        className="mt-0.5 accent-teal-500"
                                                         checked={permDraft[key] ?? false}
                                                         onChange={(e) =>
                                                             setPermDraft((prev) =>

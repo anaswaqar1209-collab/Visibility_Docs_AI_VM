@@ -4,6 +4,7 @@ import { buildDocumentFilter, hasPermission } from '../services/accessScope';
 import {
     chatWithAi,
     deleteChatSession,
+    extractGroqLimitError,
     formatAiError,
     getChatSession,
     isAiServiceEnabled,
@@ -12,6 +13,7 @@ import {
 } from '../services/aiServiceClient';
 import { PERMISSIONS } from '../types/permissions';
 import logger from '../utils/logger';
+import { recordActivityFromReq } from '../services/activityLog';
 
 export const chatWithDocuments = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -136,6 +138,7 @@ export const chatWithDocuments = async (req: Request, res: Response, next: NextF
                 documentIds: scopedPythonIds,
                 sessionId,
                 chatHistory: Array.isArray(req.body.chatHistory) ? req.body.chatHistory : undefined,
+                userId: req.user.userId,
             });
 
             const seenCite = new Set<string>();
@@ -167,8 +170,32 @@ export const chatWithDocuments = async (req: Request, res: Response, next: NextF
                     model: 'visibility-ai-rag',
                 },
             });
+            recordActivityFromReq(req, {
+                action: 'chat.message',
+                category: 'chat',
+                resourceType: 'chat_session',
+                resourceId: result.session_id || sessionId || undefined,
+                message: `Sent chat message (${chatScope})`,
+                metadata: {
+                    chatScope,
+                    preview: message.slice(0, 120),
+                    citationCount: citations.length,
+                },
+            });
         } catch (aiError: any) {
             logger.error(`AI chat proxy failed: ${formatAiError(aiError)}`);
+            const groq = extractGroqLimitError(aiError);
+            if (groq) {
+                return res.status(429).json({
+                    success: false,
+                    code: groq.code,
+                    message: groq.message,
+                    retry_after_seconds: groq.retry_after_seconds,
+                    until_ts: groq.until_ts,
+                    console_url: groq.console_url,
+                    billing_url: groq.billing_url,
+                });
+            }
             return res.status(502).json({
                 success: false,
                 message: 'AI chat service unavailable',
@@ -189,7 +216,7 @@ export const listChatSessionsHandler = async (req: Request, res: Response, next:
             return res.json({ success: true, data: { sessions: [], total: 0 } });
         }
         const orgId = resolveAiOrganizationId(req.user);
-        const sessions = await listChatSessions(orgId);
+        const sessions = await listChatSessions(orgId, req.user.userId);
         res.json({ success: true, data: { sessions, total: sessions.length } });
     } catch (error) {
         next(error);
@@ -211,6 +238,9 @@ export const getChatSessionHandler = async (req: Request, res: Response, next: N
         }
         const orgId = resolveAiOrganizationId(req.user);
         if (session.organization_id && session.organization_id !== orgId) {
+            return res.status(403).json({ success: false, message: 'Forbidden' });
+        }
+        if (session.user_id && session.user_id !== req.user.userId) {
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
         res.json({ success: true, data: { session } });
@@ -236,10 +266,20 @@ export const deleteChatSessionHandler = async (req: Request, res: Response, next
         if (existing.organization_id && existing.organization_id !== orgId) {
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
+        if (existing.user_id && existing.user_id !== req.user.userId) {
+            return res.status(403).json({ success: false, message: 'Forbidden' });
+        }
         const ok = await deleteChatSession(sessionId);
         if (!ok) {
             return res.status(502).json({ success: false, message: 'Failed to delete session' });
         }
+        recordActivityFromReq(req, {
+            action: 'chat.session.delete',
+            category: 'chat',
+            resourceType: 'chat_session',
+            resourceId: sessionId,
+            message: 'Deleted a chat session',
+        });
         res.json({ success: true, message: 'Session deleted' });
     } catch (error) {
         next(error);

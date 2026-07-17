@@ -7,7 +7,7 @@ import AuthLayout from "@/components/AuthLayout";
 import { User, Lock, LogIn, Eye, EyeOff } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { enrichUserFromToken, getRedirectPath, resolvePostLoginPath } from "@/lib/auth";
-import { ColorProvider, useTheme } from "@/context/ColorContext";
+import { ColorProvider } from "@/context/ColorContext";
 import {
     getAuthValue,
     setAuthValue,
@@ -16,11 +16,10 @@ import {
     canRefreshSession,
     hasValidAccessToken,
 } from "@/lib/authSession";
+import { Button } from "@/components/ui";
 
 function LoginForm() {
     const router = useRouter();
-    const { theme } = useTheme();
-    const colors = theme.colors;
     const [identifier, setIdentifier] = useState("");
     const [password, setPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
@@ -88,29 +87,25 @@ function LoginForm() {
 
     return (
         <AuthLayout>
-            <div className="max-w-md mx-auto space-y-5">
-                <div className="space-y-2">
-                    <h1 className={`text-2xl sm:text-3xl font-bold ${colors.textPrimary} tracking-tight`}>
+            <div className="space-y-6">
+                <div className="space-y-1.5">
+                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[var(--foreground)]">
                         Welcome back
                     </h1>
-                    <p className={`${colors.textMuted} text-sm`}>
-                        Sign in to Visibility Docs AI — OpenRemote-backed workspace.
+                    <p className="text-sm text-[var(--foreground-muted)] leading-relaxed">
+                        Sign in to your Visibility Docs AI workspace.
                     </p>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
-                    <div className="space-y-1">
-                        <label className={`text-[10px] font-semibold ${colors.textMuted} ml-1 uppercase tracking-wider`}>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-semibold text-[var(--foreground-muted)] ml-0.5 uppercase tracking-wider">
                             Email or Username
                         </label>
-                        <div
-                            className={`relative group rounded-xl transition-all duration-300 ${
-                                identifierFocused ? "ring-2 ring-blue-500/20" : ""
-                            }`}
-                        >
+                        <div className="relative">
                             <User
                                 className={`absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors ${
-                                    identifierFocused ? "text-blue-400" : colors.textMuted
+                                    identifierFocused ? "text-[var(--accent)]" : "text-[var(--foreground-muted)]"
                                 }`}
                                 size={16}
                             />
@@ -127,18 +122,14 @@ function LoginForm() {
                         </div>
                     </div>
 
-                    <div className="space-y-1">
-                        <label className={`text-[10px] font-semibold ${colors.textMuted} ml-1 uppercase tracking-wider`}>
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-semibold text-[var(--foreground-muted)] ml-0.5 uppercase tracking-wider">
                             Password
                         </label>
-                        <div
-                            className={`relative group rounded-xl transition-all duration-300 ${
-                                passwordFocused ? "ring-2 ring-blue-500/20" : ""
-                            }`}
-                        >
+                        <div className="relative">
                             <Lock
                                 className={`absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors ${
-                                    passwordFocused ? "text-blue-400" : colors.textMuted
+                                    passwordFocused ? "text-[var(--accent)]" : "text-[var(--foreground-muted)]"
                                 }`}
                                 size={16}
                             />
@@ -155,28 +146,25 @@ function LoginForm() {
                             <button
                                 type="button"
                                 onClick={() => setShowPassword((v) => !v)}
-                                className={`absolute right-3.5 top-1/2 -translate-y-1/2 ${colors.textMuted}`}
+                                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--foreground-muted)] hover:text-[var(--accent)] transition-colors"
                             >
                                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                             </button>
                         </div>
                     </div>
 
-                    <motion.button
-                        whileTap={{ scale: 0.98 }}
-                        type="submit"
-                        disabled={isLoading}
-                        className="btn-primary w-full rounded-xl py-3.5 text-sm flex items-center justify-center gap-2"
-                    >
-                        {isLoading ? (
-                            "Signing in…"
-                        ) : (
-                            <>
-                                <LogIn size={16} />
-                                Sign in
-                            </>
-                        )}
-                    </motion.button>
+                    <motion.div whileTap={{ scale: 0.98 }}>
+                        <Button type="submit" disabled={isLoading} className="w-full h-12 rounded-xl text-sm" size="lg">
+                            {isLoading ? (
+                                "Signing in…"
+                            ) : (
+                                <>
+                                    <LogIn size={16} />
+                                    Sign in
+                                </>
+                            )}
+                        </Button>
+                    </motion.div>
                 </form>
             </div>
         </AuthLayout>

@@ -2,17 +2,22 @@ import os
 import json
 import re
 import httpx
-from groq import Groq
+from groq import Groq, RateLimitError, APIStatusError
 from ..config import settings
+from . import groq_limit_state
+
+
+class GroqRateLimitExceeded(Exception):
+    """Raised when Groq daily/request token budget is exhausted."""
+
+    def __init__(self, message: str, status: dict | None = None):
+        super().__init__(message)
+        self.status = status or groq_limit_state.status_payload()
 
 
 class GroqService:
     def __init__(self):
-        api_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY", "")
-        if api_key and api_key != "gsk_your_groq_api_key":
-            self.client = Groq(api_key=api_key, timeout=httpx.Timeout(120.0))
-        else:
-            self.client = None
+        self.client = None
         self.model = "llama-3.3-70b-versatile"
         self.vision_models = [
             "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -20,21 +25,64 @@ class GroqService:
             "llama-3.2-90b-vision-preview",
         ]
         self._vision_model_idx = 0
-        self.available = self.client is not None
+        self.available = False
         self.vision_available = True
+        self._configure(settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY", ""))
+
+    def _configure(self, api_key: str):
+        key = (api_key or "").strip()
+        placeholders = {"", "gsk_your_groq_api_key", "gsk_your_groq_key_here", "your-api-key-here"}
+        if key in placeholders or key.startswith("gsk_your_"):
+            self.client = None
+            self.available = False
+            return
+        self.client = Groq(api_key=key, timeout=httpx.Timeout(120.0))
+        self.available = True
+        settings.GROQ_API_KEY = key
+        os.environ["GROQ_API_KEY"] = key
+
+    def reconfigure(self, api_key: str) -> bool:
+        self._configure(api_key)
+        if self.available:
+            groq_limit_state.clear_limit()
+        return self.available
+
+    def _raise_if_locked(self):
+        if groq_limit_state.is_limited():
+            status = groq_limit_state.status_payload()
+            raise GroqRateLimitExceeded(
+                status.get("message")
+                or "Groq rate limit active. Enter a new API key or wait for the timer.",
+                status=status,
+            )
+
+    def _handle_rate_limit(self, e: Exception, model: str | None = None):
+        msg = str(e)
+        status = groq_limit_state.mark_limited(msg, model=model or self.model)
+        raise GroqRateLimitExceeded(msg, status=status) from e
 
     def chat(self, messages: list[dict], temperature: float = 0.1, max_tokens: int = 4096, model: str = None) -> str:
+        self._raise_if_locked()
         if not self.available:
             return self._fallback_response(messages)
-        response = self.client.chat.completions.create(
-            model=model or self.model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return response.choices[0].message.content
+        use_model = model or self.model
+        try:
+            response = self.client.chat.completions.create(
+                model=use_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content
+        except RateLimitError as e:
+            self._handle_rate_limit(e, use_model)
+        except APIStatusError as e:
+            if getattr(e, "status_code", None) == 429 or "rate_limit" in str(e).lower():
+                self._handle_rate_limit(e, use_model)
+            raise
 
     def chat_vision(self, messages: list[dict], temperature: float = 0.1, max_tokens: int = 4096) -> str:
+        self._raise_if_locked()
         if not self.available or not self.vision_available:
             return self._fallback_response(messages)
 
@@ -50,9 +98,21 @@ class GroqService:
                 )
                 self._vision_model_idx = i
                 return response.choices[0].message.content
+            except RateLimitError as e:
+                self._handle_rate_limit(e, model)
+            except APIStatusError as e:
+                if getattr(e, "status_code", None) == 429 or "rate_limit" in str(e).lower():
+                    self._handle_rate_limit(e, model)
+                err = str(e).lower()
+                errors.append(f"{model}: {e}")
+                if "does not support image" in err or "cannot read" in err:
+                    continue
+                raise
             except Exception as e:
                 err = str(e).lower()
                 errors.append(f"{model}: {e}")
+                if "429" in err or "rate_limit" in err:
+                    self._handle_rate_limit(e, model)
                 if "does not support image" in err or "cannot read" in err:
                     continue
                 raise

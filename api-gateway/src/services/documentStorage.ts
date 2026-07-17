@@ -22,13 +22,93 @@ export const UPLOAD_ROOT = process.env.SHARED_STORAGE_PATH
     ? path.resolve(process.env.SHARED_STORAGE_PATH)
     : path.join(VM_MAIN_ROOT, 'shared-storage');
 
+/** Known document types → by-type/{type}/… folders */
+export const KNOWN_DOCUMENT_TYPES = new Set([
+    'invoice',
+    'purchase_order',
+    'quotation',
+    'financial_statement',
+    'contract',
+    'hr_document',
+    'resume',
+    'transcript',
+    'audit_report',
+    'quality_report',
+    'certificate',
+    'sop',
+    'maintenance_report',
+    'engineering_drawing',
+    'other',
+]);
+
 export function ensureUploadDir() {
     if (!fs.existsSync(UPLOAD_ROOT)) {
         fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
     }
 }
 
-export function getDocumentDir(orgFolder: string, documentId: string) {
+export function resolveOrgFolder(organizationId?: string | null, userId?: string | null): string {
+    if (organizationId) return organizationId;
+    if (userId) return `personal_${userId}`;
+    return 'personal_unknown';
+}
+
+export function normalizeDocumentType(raw?: string | null): string {
+    if (!raw) return 'other';
+    let t = String(raw).trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (t === 'cv' || t === 'curriculum_vitae' || t === 'curriculum') t = 'resume';
+    if (t === 'po') t = 'purchase_order';
+    if (t === 'hr') t = 'hr_document';
+    if (!KNOWN_DOCUMENT_TYPES.has(t)) return 'other';
+    return t;
+}
+
+export function inferDocumentTypeFromFilename(filename: string): string | null {
+    const name = filename.toLowerCase();
+    if (/\b(cv|resume|curriculum)\b/.test(name)) return 'resume';
+    if (name.includes('invoice')) return 'invoice';
+    if (name.includes('contract')) return 'contract';
+    if (name.includes('quotation') || name.includes('quote')) return 'quotation';
+    if (name.includes('purchase') || /\bpo\b/.test(name)) return 'purchase_order';
+    if (name.includes('certificate')) return 'certificate';
+    if (name.includes('transcript')) return 'transcript';
+    if (name.includes('sop')) return 'sop';
+    return null;
+}
+
+function yyyyMm(date: Date = new Date()): { yyyy: string; mm: string } {
+    const yyyy = String(date.getUTCFullYear());
+    const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+    return { yyyy, mm };
+}
+
+/**
+ * Layout:
+ *   orgs/{orgId}/by-type/{documentType}/{yyyy}/{mm}/{documentId}/
+ * Unclassified inbox:
+ *   orgs/{orgId}/by-type/other/inbox/{documentId}/
+ */
+export function getDocumentDir(
+    orgFolder: string,
+    documentId: string,
+    options?: {
+        documentType?: string | null;
+        createdAt?: Date | string | null;
+        inbox?: boolean;
+    }
+): string {
+    if (options?.inbox) {
+        return path.join(UPLOAD_ROOT, 'orgs', orgFolder, 'by-type', 'other', 'inbox', documentId);
+    }
+
+    const type = normalizeDocumentType(options?.documentType);
+    const when = options?.createdAt ? new Date(options.createdAt) : new Date();
+    const { yyyy, mm } = yyyyMm(Number.isNaN(when.getTime()) ? new Date() : when);
+    return path.join(UPLOAD_ROOT, 'orgs', orgFolder, 'by-type', type, yyyy, mm, documentId);
+}
+
+/** @deprecated Prefer getDocumentDir with type options — kept for callers expecting old signature */
+export function getLegacyDocumentDir(orgFolder: string, documentId: string) {
     return path.join(UPLOAD_ROOT, 'orgs', orgFolder, 'documents', documentId);
 }
 
@@ -37,6 +117,130 @@ export function deleteDocumentFolder(storagePath: string) {
     if (fs.existsSync(dir)) {
         fs.rmSync(dir, { recursive: true, force: true });
     }
+    // Clean empty parent month/year folders (best-effort)
+    try {
+        let parent = path.dirname(dir);
+        for (let i = 0; i < 3; i++) {
+            if (!fs.existsSync(parent)) break;
+            const entries = fs.readdirSync(parent);
+            if (entries.length > 0) break;
+            fs.rmdirSync(parent);
+            parent = path.dirname(parent);
+        }
+    } catch {
+        /* ignore */
+    }
+}
+
+/**
+ * Move document folder into by-type/{type}/{yyyy}/{mm}/{documentId}/ and return new storagePath.
+ * No-op if already at the correct location.
+ */
+export function relocateDocumentOnDisk(
+    doc: {
+        documentId: string;
+        storagePath: string;
+        storedFilename: string;
+        organizationId?: string | null;
+        uploadedBy: string;
+        createdAt?: Date | string;
+        classification?: string | null;
+    },
+    documentType: string
+): { storagePath: string; moved: boolean; destDir: string } {
+    const type = normalizeDocumentType(documentType);
+    const orgFolder = resolveOrgFolder(doc.organizationId, doc.uploadedBy);
+    const destDir = getDocumentDir(orgFolder, doc.documentId, {
+        documentType: type,
+        createdAt: doc.createdAt || new Date(),
+        inbox: false,
+    });
+
+    const currentDir = path.dirname(doc.storagePath);
+    const newStoragePath = path.join(destDir, doc.storedFilename || path.basename(doc.storagePath));
+
+    if (path.resolve(currentDir) === path.resolve(destDir)) {
+        return { storagePath: doc.storagePath, moved: false, destDir };
+    }
+
+    fs.mkdirSync(destDir, { recursive: true });
+
+    if (fs.existsSync(doc.storagePath)) {
+        // Move whole document directory contents if currentDir is the doc folder
+        if (path.basename(currentDir) === doc.documentId && fs.existsSync(currentDir)) {
+            // Move each entry into destDir (handles original + any derived files)
+            for (const name of fs.readdirSync(currentDir)) {
+                const from = path.join(currentDir, name);
+                const to = path.join(destDir, name);
+                if (fs.existsSync(to)) {
+                    fs.rmSync(to, { recursive: true, force: true });
+                }
+                fs.renameSync(from, to);
+            }
+            try {
+                fs.rmSync(currentDir, { recursive: true, force: true });
+            } catch {
+                /* ignore */
+            }
+        } else {
+            fs.renameSync(doc.storagePath, newStoragePath);
+        }
+    } else if (!fs.existsSync(newStoragePath)) {
+        logger.warn(`relocateDocumentOnDisk: source missing ${doc.storagePath}`);
+        return { storagePath: doc.storagePath, moved: false, destDir };
+    }
+
+    // Clean empty old parents
+    try {
+        let parent = currentDir;
+        for (let i = 0; i < 4; i++) {
+            if (!fs.existsSync(parent)) break;
+            if (fs.readdirSync(parent).length > 0) break;
+            fs.rmdirSync(parent);
+            parent = path.dirname(parent);
+        }
+    } catch {
+        /* ignore */
+    }
+
+    const finalPath = fs.existsSync(newStoragePath)
+        ? newStoragePath
+        : path.join(destDir, doc.storedFilename || path.basename(doc.storagePath));
+
+    logger.info(`Relocated document ${doc.documentId} → ${finalPath}`);
+    return { storagePath: finalPath, moved: true, destDir };
+}
+
+/** Apply type-based folder layout and persist storagePath on the mongoose doc (caller may save). */
+export async function applyDocumentTypeStorage(
+    doc: InstanceType<typeof Document>,
+    documentType: string
+): Promise<boolean> {
+    const type = normalizeDocumentType(documentType);
+    if (!type) return false;
+
+    const result = relocateDocumentOnDisk(
+        {
+            documentId: doc.documentId,
+            storagePath: doc.storagePath,
+            storedFilename: doc.storedFilename,
+            organizationId: doc.organizationId,
+            uploadedBy: doc.uploadedBy,
+            createdAt: doc.createdAt,
+            classification: doc.classification,
+        },
+        type
+    );
+
+    if (result.moved) {
+        doc.storagePath = result.storagePath;
+        doc.metadata = {
+            ...(doc.metadata || {}),
+            storageLayout: 'by-type',
+            storageType: type,
+        };
+    }
+    return result.moved;
 }
 
 export async function deleteDocumentFully(
@@ -68,7 +272,11 @@ export type SaveUploadResult = {
     aiModelResponse: AiUploadResult | null;
 };
 
-export async function saveUploadedFile(user: AuthUser, file: UploadFileInput, phase3Agent?: string): Promise<SaveUploadResult> {
+export async function saveUploadedFile(
+    user: AuthUser,
+    file: UploadFileInput,
+    phase3Agent?: string
+): Promise<SaveUploadResult> {
     const validation = isAllowedFile(file.originalname, file.mimetype);
     if (!validation.ok) {
         if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
@@ -76,8 +284,11 @@ export async function saveUploadedFile(user: AuthUser, file: UploadFileInput, ph
     }
 
     const documentId = `doc_${uuidv4()}`;
-    const orgFolder = user.organizationId || `personal_${user.userId}`;
-    const destDir = getDocumentDir(orgFolder, documentId);
+    const orgFolder = resolveOrgFolder(user.organizationId, user.userId);
+
+    // Always land in inbox — filename is unreliable; AI/manual classify moves to by-type/{type}/…
+    const destDir = getDocumentDir(orgFolder, documentId, { inbox: true });
+
     fs.mkdirSync(destDir, { recursive: true });
 
     const storedFilename = sanitizeFilename(file.originalname);
@@ -126,6 +337,16 @@ export async function saveUploadedFile(user: AuthUser, file: UploadFileInput, ph
             status = 'processing';
             aiModelResponse = aiResult;
         } catch (e: any) {
+            const { extractGroqLimitError } = await import('./aiServiceClient');
+            const groq = extractGroqLimitError(e);
+            if (groq) {
+                deleteDocumentFolder(storagePath);
+                throw Object.assign(new Error(groq.message), {
+                    statusCode: 429,
+                    code: 'GROQ_RATE_LIMIT',
+                    groq,
+                });
+            }
             aiErrorMessage = e.message || 'AI upload failed';
             status = 'failed';
             logger.warn(`AI forward failed for ${documentId}: ${aiErrorMessage}`);
@@ -151,6 +372,8 @@ export async function saveUploadedFile(user: AuthUser, file: UploadFileInput, ph
         metadata: {
             source: 'web_upload',
             aiSynced: !!pythonDocumentId,
+            storageLayout: 'by-type',
+            storageType: 'inbox',
             ...(phase3Agent ? { phase3Agent } : {}),
             ...(pythonDocumentId && aiOrgId ? { aiOrgId } : {}),
         },

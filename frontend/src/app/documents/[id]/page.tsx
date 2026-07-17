@@ -62,8 +62,8 @@ function DocumentPreviewContent() {
     const canPreview = doc && canPreviewMime(doc.mimeType);
 
     return (
-        <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-4">
-            <Link href="/documents" className={`inline-flex items-center gap-2 text-sm ${colors.textMuted} hover:text-white`}>
+        <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4">
+            <Link href="/documents" className={`inline-flex items-center gap-2 text-sm ${colors.textMuted} hover:text-[var(--accent)]`}>
                 <ArrowLeft size={14} /> Back to library
             </Link>
 
@@ -74,7 +74,7 @@ function DocumentPreviewContent() {
                 <>
                     <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                            <h1 className={`text-xl font-bold ${colors.textPrimary}`}>{doc.originalFilename}</h1>
+                            <h1 className={`text-lg sm:text-xl font-bold break-all ${colors.textPrimary}`}>{doc.originalFilename}</h1>
                             <p className={`text-sm ${colors.textMuted}`}>{doc.mimeType} · {doc.status}</p>
                         </div>
                         <a href={downloadUrl} className="btn-secondary rounded-xl px-4 py-2.5 text-sm flex items-center gap-2">
@@ -82,7 +82,7 @@ function DocumentPreviewContent() {
                         </a>
                     </div>
 
-                    <div className="glass rounded-2xl overflow-hidden min-h-[60vh]">
+                    <div className="surface-card overflow-hidden min-h-[60vh]">
                         {canPreview ? (
                             previewLoading ? (
                                 <div className={`p-12 text-center ${colors.textMuted}`}>Loading preview…</div>

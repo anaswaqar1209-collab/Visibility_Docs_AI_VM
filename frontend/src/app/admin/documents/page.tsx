@@ -9,6 +9,7 @@ import LibraryPagination from "@/components/LibraryPagination";
 import { useTheme } from "@/context/ColorContext";
 import { apiRequest } from "@/lib/apiClient";
 import { FILE_TYPE_MIME, FILE_TYPE_OPTIONS, getFileTypeLabel } from "@/lib/fileValidation";
+import { PageHeader } from "@/components/ui";
 
 type DocItem = {
     documentId: string;
@@ -66,13 +67,13 @@ function AdminDocumentsContent() {
     useEffect(() => { load(); }, [load]);
 
     return (
-        <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
-            <div>
-                <h1 className={`text-2xl font-bold ${colors.textPrimary}`}>All Documents</h1>
-                <p className={`text-sm ${colors.textMuted}`}>Platform-wide document library</p>
-            </div>
+        <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6 animate-fade-in-up">
+            <PageHeader
+                title="All Documents"
+                subtitle="Platform-wide document library"
+            />
 
-            <div className="glass rounded-2xl">
+            <div className="surface-card">
                 <div className={`px-5 py-4 border-b ${colors.borderPrimary} flex flex-wrap items-center justify-between gap-3`}>
                     <div className="flex items-center gap-2">
                         <FileText size={16} className={colors.textMuted} />
@@ -84,9 +85,9 @@ function AdminDocumentsContent() {
                     </button>
                 </div>
 
-                <div className={`px-5 py-4 border-b ${colors.borderPrimary} bg-white/[0.02]`}>
-                    <div className="flex flex-wrap items-end gap-3">
-                        <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
+                <div className={`px-4 sm:px-5 py-4 border-b ${colors.borderPrimary} bg-white/[0.02]`}>
+                    <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-end gap-3">
+                        <div className="flex flex-col gap-1 flex-1 min-w-0 w-full sm:min-w-[200px]">
                             <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 ml-0.5">Search</span>
                             <div className="relative">
                                 <Search size={16} className={`absolute left-3 top-1/2 -translate-y-1/2 ${colors.textMuted}`} />
@@ -104,16 +105,16 @@ function AdminDocumentsContent() {
                             value={fileTypeFilter}
                             onChange={(v) => { setFileTypeFilter(v); setPage(1); }}
                             options={[...FILE_TYPE_OPTIONS]}
-                            minWidth="min-w-[150px]"
+                            minWidth="w-full sm:min-w-[150px] sm:w-auto"
                         />
                         <FilterSelect
                             label="Duplicates"
                             value={duplicatesOnly}
                             onChange={(v) => { setDuplicatesOnly(v); setPage(1); }}
                             options={DUPLICATE_OPTIONS}
-                            minWidth="min-w-[140px]"
+                            minWidth="w-full sm:min-w-[140px] sm:w-auto"
                         />
-                        <button type="button" onClick={applySearch} className="btn-gradient rounded-xl px-4 py-2.5 text-sm h-[42px] self-end">
+                        <button type="button" onClick={applySearch} className="btn-gradient rounded-xl px-4 py-2.5 text-sm h-[42px] w-full sm:w-auto sm:self-end">
                             Search
                         </button>
                     </div>
@@ -127,24 +128,24 @@ function AdminDocumentsContent() {
                 ) : (
                     <ul className="divide-y divide-white/5">
                         {docs.map((doc) => (
-                            <li key={doc.documentId} className="px-5 py-4 flex flex-wrap justify-between gap-3">
-                                <div>
+                            <li key={doc.documentId} className="px-4 sm:px-5 py-4 flex flex-col sm:flex-row sm:flex-wrap justify-between gap-3">
+                                <div className="min-w-0 flex-1">
                                     <div className="flex items-center gap-2 flex-wrap">
-                                        <p className={`font-medium ${colors.textPrimary}`}>{doc.originalFilename}</p>
+                                        <p className={`font-medium truncate min-w-0 ${colors.textPrimary}`}>{doc.originalFilename}</p>
                                         {doc.isDuplicate && (
                                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase bg-amber-500/15 text-amber-300 border border-amber-500/25">
                                                 <Copy size={10} /> Duplicate ×{doc.duplicateCount}
                                             </span>
                                         )}
                                     </div>
-                                    <p className={`text-xs ${colors.textMuted}`}>
-                                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase mr-2 ${isDark ? "bg-blue-500/15 text-blue-300" : "bg-blue-100 text-blue-700"}`}>
+                                    <p className={`text-xs ${colors.textMuted} break-words`}>
+                                        <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase mr-2 bg-[var(--accent-muted)] text-[var(--accent)] border border-[rgba(45,212,191,0.2)]">
                                             {getFileTypeLabel(doc.mimeType, doc.originalFilename)}
                                         </span>
                                         org: {doc.organizationId || "—"} · by {doc.uploadedBy}
                                     </p>
                                 </div>
-                                <Link href={`/documents/${doc.documentId}`} className="btn-secondary rounded-lg px-3 py-2 text-sm flex items-center gap-1">
+                                <Link href={`/documents/${doc.documentId}`} className="btn-secondary rounded-lg px-3 py-2 text-sm flex items-center justify-center gap-1 min-h-10 w-full sm:w-auto">
                                     <Eye size={14} /> Preview
                                 </Link>
                             </li>
