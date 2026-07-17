@@ -252,7 +252,24 @@ class ChatService:
                 best_field = field
         return best_field if best_score >= 2 else None
 
-    def _build_field_summary(self, chunks: list[dict], field_type: str) -> str:
+    def _filename_from_url(self, url: str) -> str:
+        """Extract filename from a URL/path like 'path/to/file.pdf' → 'file.pdf'."""
+        if not url:
+            return ""
+        # Handle both forward slashes (URLs) and backslashes (Windows paths)
+        sep = "\\" if "\\" in url else "/"
+        name = url.rstrip("/\\").split(sep)[-1]
+        # Decode URL-encoded characters (%20 → space, etc.)
+        if "%" in name:
+            try:
+                from urllib.parse import unquote
+                name = unquote(name)
+            except Exception:
+                pass
+        return name
+
+    def _build_field_summary(self, chunks: list[dict], field_type: str,
+                             name_map: dict = None) -> str:
         """From a list of chunks, extract field values via regex for the given
         field type and build a compact text summary.  Falls back to a simple
         listing when extraction yields nothing."""
@@ -263,24 +280,26 @@ class ChatService:
         found_any = False
         for i, r in enumerate(chunks):
             text = r.get("chunk_text", "")
-            title = r.get("document_title", f"Document {i+1}")
+            raw = r.get("document_title", f"Document {i+1}")
+            display = (name_map or {}).get(r.get("document_id", ""), raw)
             matches = cfg["regex"].findall(text)
             if matches:
                 found_any = True
                 vals = ", ".join(set(m.strip() for m in matches[:3]))
-                lines.append(f"  [Document: {title}]: {vals}")
+                lines.append(f"  [Document: {display}]: {vals}")
             else:
-                lines.append(f"  [Document: {title}]: (none found)")
+                lines.append(f"  [Document: {display}]: (none found)")
         if not found_any:
             # No regex matches – fall back to showing raw text snippets from each doc
             lines = [f"[{cfg['label']} - raw snippets from each document]"]
             for i, r in enumerate(chunks):
                 text = r.get("chunk_text", "")[:200].strip()
-                title = r.get("document_title", f"Document {i+1}")
+                raw = r.get("document_title", f"Document {i+1}")
+                display = (name_map or {}).get(r.get("document_id", ""), raw)
                 if text:
-                    lines.append(f"  [Document: {title}]: {text}")
+                    lines.append(f"  [Document: {display}]: {text}")
                 else:
-                    lines.append(f"  [Document: {title}]: (empty)")
+                    lines.append(f"  [Document: {display}]: (empty)")
         return "\n".join(lines)
 
     def chat_with_document(self, question: str, document_ids: list, organization_id: str,
@@ -439,10 +458,9 @@ class ChatService:
                 "session_id": sid,
             }
 
-        context_parts = []
+        # ── Build sources list from search results ──
         sources = []
         for r in search_results:
-            context_parts.append(f"[Document: {r['document_title']}]: {r['chunk_text']}")
             sources.append({
                 "document_id": r["document_id"],
                 "document_title": r["document_title"],
@@ -453,11 +471,41 @@ class ChatService:
                 "score": r["score"],
             })
 
+        # ── Fetch original_file_url and build display-name map ──
+        # Prefer the actual filename from the URL over the stored document_title.
+        id_to_display = {}
+        try:
+            unique_ids = list(set(s["document_id"] for s in sources))
+            if unique_ids:
+                file_result = SupabaseDB.select("documents",
+                    columns="id, original_file_url, title",
+                    filters={"organization_id": organization_id},
+                )
+                file_data = getattr(file_result, "data", file_result if isinstance(file_result, list) else [])
+                if isinstance(file_data, list):
+                    for row in file_data:
+                        rid = row.get("id")
+                        if rid in unique_ids:
+                            url = row.get("original_file_url") or ""
+                            title = row.get("title") or ""
+                            # Extract filename from URL; fall back to title or doc ID
+                            fname = self._filename_from_url(url) if url else ""
+                            id_to_display[rid] = fname or title or rid
+                            # Also attach file_url to sources for frontend
+                            for s in sources:
+                                if s["document_id"] == rid:
+                                    s["file_url"] = url
+        except Exception:
+            pass
+
+        # ── Build context with display names ──
+        context_parts = []
+        for r in search_results:
+            display = id_to_display.get(r["document_id"], r["document_title"])
+            context_parts.append(f"[Document: {display}]: {r['chunk_text']}")
+
         # ── Compact field summary (for field queries like "saare numbers") ──
-        # When we detect a field type (phone/email/amount/date), extract values
-        # from chunks via regex and build a tiny summary.  This replaces the
-        # full chunk context – faster, more accurate, no 413 risk.
-        field_summary = self._build_field_summary(search_results, field_type) if field_type else None
+        field_summary = self._build_field_summary(search_results, field_type, id_to_display) if field_type else None
 
         if field_summary:
             context = field_summary
@@ -485,22 +533,6 @@ class ChatService:
                 sources = kept_sources
                 context_len = len(context)
                 chat_log.info(f"Truncated context to {context_len} chars ({len(sources)} sources)")
-
-        # ── Attach file_url to sources for frontend file name display ──
-        try:
-            unique_ids = list(set(s["document_id"] for s in sources))
-            if unique_ids:
-                file_result = SupabaseDB.select("documents",
-                    columns="id, original_file_url",
-                    filters={"organization_id": organization_id},
-                )
-                file_data = getattr(file_result, "data", file_result if isinstance(file_result, list) else [])
-                if isinstance(file_data, list):
-                    id_to_url = {row["id"]: row.get("original_file_url", "") for row in file_data if row.get("id") in unique_ids}
-                    for s in sources:
-                        s["file_url"] = id_to_url.get(s["document_id"], "")
-        except Exception:
-            pass
 
         # ── Resume ranking: if query mentions resumes, inject sorted scores ──
         resumes = []
@@ -675,13 +707,17 @@ class ChatService:
                     "6. If the context has tables or diagrams, explain what they show.\n"
                     f"{resume_rank_instruction}"
                 )
-        # ── Common instruction: cite document sources in the answer ──
+        # ── Common instructions: source citation + counter questions ──
         qa_prompt += (
             "\n9. When you provide extracted values or information, ALWAYS mention "
             "which document they came from using the document name shown in brackets "
             "[Document: ...] in the context.\n"
             "   Example: 'Invoice-001: 0300-1234567, Resume-John: 042-1112233'\n"
-            "   Never just list values without saying which file they belong to."
+            "   Never just list values without saying which file they belong to.\n"
+            "10. At the end of your answer, ALWAYS suggest 2-3 relevant follow-up "
+            "questions the user might ask next.  Put them under a '---' separator "
+            "or label them as 'Suggested Questions:'.  Make sure they are specific "
+            "to the documents discussed, not generic."
         )
 
         chat_log.info(f"Built Q&A prompt for agent: {dominant_agent} ({len(qa_prompt)} chars)")
