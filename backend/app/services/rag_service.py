@@ -1745,65 +1745,84 @@ class RAGService:
         except Exception:
             return []
 
+    def _fetch_any_chunks(self, document_ids: list[str], org_id: str, limit_per_doc: int = 1) -> list[dict]:
+        """Fast fallback: grab the first chunk(s) from each doc via direct DB query."""
+        if not document_ids:
+            return []
+        results = []
+        try:
+            for did in document_ids:
+                rows = SupabaseDB.select("document_chunks",
+                    columns="id, document_id, content, chunk_index, page_id",
+                    filters={"document_id": did, "organization_id": org_id},
+                    limit=limit_per_doc,
+                )
+                data = getattr(rows, "data", rows if isinstance(rows, list) else [])
+                if isinstance(data, list):
+                    for row in data[:limit_per_doc]:
+                        if isinstance(row, dict):
+                            results.append({
+                                "document_id": row.get("document_id", did),
+                                "document_title": did,
+                                "document_type": "",
+                                "chunk_text": row.get("content", ""),
+                                "page_number": row.get("page_id", ""),
+                                "score": 0.0,
+                            })
+        except Exception:
+            pass
+        return results
+
     def aggregate_search(self, query: str, organization_id: str,
                          document_ids: list = None,
                          max_docs: int = 150) -> list[dict]:
         """
-        Broad cross-document search that guarantees every document contributes
-        at least 1 relevant chunk.  Two-phase strategy:
-
-        1. Broad fused hybrid_search with high recall (limit = min(2*ndocs, 400)).
-        2. Per-document fallback for any doc that the broad pass missed.
+        Fast cross-document search that guarantees every document contributes
+        at least 1 chunk.  Uses a single broad search + lazy fallback (no
+        per-doc loops), so it's fast even for 100+ documents.
         """
         from .orchestration_logger import get_chat_logger
         chat_log = get_chat_logger()
 
-        # Phase 0 – resolve the document set
         target_ids = document_ids or self._list_org_document_ids(organization_id, limit=max_docs)
         if not target_ids:
             return []
         chat_log.info(f"Aggregate search targeting {len(target_ids)} docs")
 
-        # Phase 1 – broad fused search
-        broad_limit = min(len(target_ids) * 2, 400)
-        broad_kwargs = dict(
+        # Phase 1 – single broad search
+        broad_limit = min(len(target_ids) * 2, 200)  # cap at 200 for speed
+        broad_results = self.hybrid_search(
             query=query,
             organization_id=organization_id,
             document_ids=target_ids,
             limit=broad_limit,
         )
-        broad_results = self.hybrid_search(**broad_kwargs)
-        covered = set(r["document_id"] for r in broad_results)
-        chat_log.info(f"Broad pass covered {len(covered)}/{len(target_ids)} docs ({len(broad_results)} chunks)")
 
-        # Phase 2 – per-doc fallback for uncovered documents
-        uncovered = [did for did in target_ids if did not in covered]
-        fallback = []
+        # Phase 2 – per-doc guarantee: keep best chunk per doc
+        best_per_doc = {}
+        for r in broad_results:
+            did = r["document_id"]
+            score = r.get("score", 0)
+            if did not in best_per_doc or score > best_per_doc[did].get("score", 0):
+                best_per_doc[did] = r
+
+        # Phase 3 – lazy fallback for any uncovered doc
+        uncovered = [did for did in target_ids if did not in best_per_doc]
         if uncovered:
-            for did in uncovered:
-                try:
-                    per = self.hybrid_search(query, organization_id, document_ids=[did], limit=1)
-                    if per:
-                        fallback.append(per[0])
-                except Exception:
-                    continue
-            chat_log.info(f"Fallback added {len(fallback)} chunks from {len(uncovered)} uncovered docs")
-            covered.update(r["document_id"] for r in fallback)
+            fallback = self._fetch_any_chunks(uncovered, organization_id)
+            for fb in fallback:
+                did = fb["document_id"]
+                if did not in best_per_doc:
+                    best_per_doc[did] = fb
+            chat_log.info(f"Fallback covered {len(fallback)}/{len(uncovered)} uncovered docs")
 
-        # Merge, dedupe, rerank
-        merged = broad_results + fallback
-        seen = set()
-        deduped = []
-        for r in merged:
-            key = (r.get("document_id", ""), r.get("page_number", ""), r.get("chunk_text", "")[:80])
-            if key not in seen:
-                seen.add(key)
-                deduped.append(r)
-        if deduped:
-            deduped = self._rerank(deduped, query, len(deduped))
-        deduped = self._fetch_neighbor_chunks(deduped, organization_id)
-        chat_log.info(f"Aggregate search final: {len(deduped)} chunks across {len(set(r['document_id'] for r in deduped))} docs")
-        return deduped
+        # Phase 4 – rerank
+        merged = list(best_per_doc.values())
+        if merged:
+            merged = self._rerank(merged, query, len(merged))
+        merged = self._fetch_neighbor_chunks(merged, organization_id)
+        chat_log.info(f"Aggregate final: {len(merged)} chunks across {len(set(r['document_id'] for r in merged))} docs")
+        return merged
 
 
 rag_service = RAGService()

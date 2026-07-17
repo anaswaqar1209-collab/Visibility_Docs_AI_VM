@@ -38,6 +38,36 @@ _CROSS_DOC_DROP = {
     "mai", "mein", "say", "se", "laa", "kr", "kar", "par",
 }
 
+# ── Field extraction patterns ──
+# These detect and extract specific field values from chunk text, allowing
+# cross-doc field queries (e.g. "saare numbers") to build a compact summary
+# instead of feeding all chunks to the LLM.  This is faster and avoids the
+# 413 "Request too large" error because the summary is tiny (a few KB).
+import re
+
+_FIELD_PATTERNS = {
+    "phone": {
+        "triggers": {"phone", "phones", "number", "numbers", "contact", "mobile", "cell", "telephone", "phone number", "phone numbers", "contact number"},
+        "regex": re.compile(r'(?:\+?92|0)[.\- ]?[0-9]{2,3}[.\- ]?[0-9]{3,4}[.\- ]?[0-9]{3,4}(?:x\d+)?|0[.\- ]?3[0-9]{2}[.\- ]?[0-9]{3,4}[.\- ]?[0-9]{3,4}'),
+        "label": "Phone",
+    },
+    "email": {
+        "triggers": {"email", "emails", "e-mail", "mail", "contact"},
+        "regex": re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'),
+        "label": "Email",
+    },
+    "amount": {
+        "triggers": {"amount", "amounts", "total", "totals", "sum", "price", "prices", "cost", "costs", "value", "values", "figure", "figures", "number", "numbers", "rate", "rates", "fee", "fees", "payment", "payments", "subtotal", "grand total", "tax", "vat", "gst", "raqam", "paisa"},
+        "regex": re.compile(r'(?:PKR|Rs\.?|USD|\$|EUR|£)[.\- ]?[0-9,]+(?:\.[0-9]{2,})?|[0-9,]+(?:\.[0-9]{2,})?\s*(?:PKR|Rs\.?|USD|\$|EUR|£)|[0-9,]+(?:\.[0-9]{2,})?'),
+        "label": "Amount",
+    },
+    "date": {
+        "triggers": {"date", "dates", "day", "days", "month", "year", "years", "time", "deadline", "due date", "invoice date", "created", "created at", "dob", "birth date"},
+        "regex": re.compile(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}|[A-Z][a-z]{2,}\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Z][a-z]{2,}\s+\d{4}'),
+        "label": "Date",
+    },
+}
+
 
 class ChatService:
     def _get_or_create_session(self, session_id: str, organization_id: str, document_ids: list = None) -> tuple[str, list, bool]:
@@ -204,6 +234,55 @@ class ChatService:
             return None
         return ranked[0][0]
 
+    def _detect_field_type(self, query: str) -> str | None:
+        """Return the field type (phone/email/amount/date) if the query asks for
+        specific field values, or None for general questions."""
+        q = query.lower().strip()
+        # Weighted scoring: direct trigger matches + overall relevance
+        best_field = None
+        best_score = 0
+        for field, cfg in _FIELD_PATTERNS.items():
+            score = sum(1 for t in cfg["triggers"] if t in q) * 2
+            # Boost if the word is the main subject (near start of query)
+            for t in cfg["triggers"]:
+                if q.startswith(t) or q.endswith(t) or f" {t} " in f" {q} ":
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best_field = field
+        return best_field if best_score >= 2 else None
+
+    def _build_field_summary(self, chunks: list[dict], field_type: str) -> str:
+        """From a list of chunks, extract field values via regex for the given
+        field type and build a compact text summary.  Falls back to a simple
+        listing when extraction yields nothing."""
+        cfg = _FIELD_PATTERNS.get(field_type)
+        if not cfg:
+            return ""
+        lines = [f"[Extracted {cfg['label']} values from documents]"]
+        found_any = False
+        for i, r in enumerate(chunks):
+            text = r.get("chunk_text", "")
+            title = r.get("document_title", f"Document {i+1}")
+            matches = cfg["regex"].findall(text)
+            if matches:
+                found_any = True
+                vals = "; ".join(set(m.strip() for m in matches[:5]))
+                lines.append(f"  {title}: {vals}")
+            else:
+                lines.append(f"  {title}: (none found)")
+        if not found_any:
+            # No regex matches – fall back to showing raw text snippets from each doc
+            lines = [f"[{cfg['label']} - raw snippets from each document]"]
+            for i, r in enumerate(chunks):
+                text = r.get("chunk_text", "")[:200].strip()
+                title = r.get("document_title", f"Document {i+1}")
+                if text:
+                    lines.append(f"  {title}: {text}")
+                else:
+                    lines.append(f"  {title}: (empty)")
+        return "\n".join(lines)
+
     def chat_with_document(self, question: str, document_ids: list, organization_id: str,
                            document_type: str = None, phase3_agent: str = None,
                            status: str = None, date_from: str = None, date_to: str = None,
@@ -251,6 +330,12 @@ class ChatService:
             )
         else:
             search_results = rag_service.hybrid_search(**hybrid_kwargs)
+
+        # ── Field-type detection (phone, email, amount, date) ──
+        # When the query asks for specific field values from all docs, build a
+        # compact regex-based summary instead of feeding full chunk text to the
+        # LLM.  This is faster, avoids 413 errors, and is more accurate.
+        field_type = self._detect_field_type(question) if search_results and is_cross_doc else None
 
         q_lower = question.lower()
         is_resume_query = any(
@@ -368,27 +453,38 @@ class ChatService:
                 "score": r["score"],
             })
 
-        context = "\n\n".join(context_parts)
-        context_len = len(context)
+        # ── Compact field summary (for field queries like "saare numbers") ──
+        # When we detect a field type (phone/email/amount/date), extract values
+        # from chunks via regex and build a tiny summary.  This replaces the
+        # full chunk context – faster, more accurate, no 413 risk.
+        field_summary = self._build_field_summary(search_results, field_type) if field_type else None
 
-        # Truncate context to stay within Groq free-tier input limits (12K TPM,
-        # ≈7K tokens).  Aggregate_search can produce many chunks; without this
-        # cap, the LLM call fails with a 413 "Request too large" error.
-        MAX_CONTEXT_CHARS = 28000
-        if len(context) > MAX_CONTEXT_CHARS:
-            kept_parts, kept_sources = [], []
-            total = 0
-            for part, src in zip(context_parts, sources):
-                added = len(part) + 2
-                if total + added > MAX_CONTEXT_CHARS:
-                    break
-                kept_parts.append(part)
-                kept_sources.append(src)
-                total += added
-            context = "\n\n".join(kept_parts)
-            sources = kept_sources
+        if field_summary:
+            context = field_summary
             context_len = len(context)
-            chat_log.info(f"Truncated context to {context_len} chars ({len(sources)} sources)")
+            chat_log.info(f"Field summary: {context_len} chars for {field_type}")
+        else:
+            context = "\n\n".join(context_parts)
+            context_len = len(context)
+
+            # Truncate context to stay within Groq free-tier input limits (12K
+            # TPM, ≈7K tokens).  Aggregate_search can produce many chunks;
+            # without this cap, the LLM call fails with 413.
+            MAX_CONTEXT_CHARS = 28000
+            if len(context) > MAX_CONTEXT_CHARS:
+                kept_parts, kept_sources = [], []
+                total = 0
+                for part, src in zip(context_parts, sources):
+                    added = len(part) + 2
+                    if total + added > MAX_CONTEXT_CHARS:
+                        break
+                    kept_parts.append(part)
+                    kept_sources.append(src)
+                    total += added
+                context = "\n\n".join(kept_parts)
+                sources = kept_sources
+                context_len = len(context)
+                chat_log.info(f"Truncated context to {context_len} chars ({len(sources)} sources)")
 
         # ── Attach file_url to sources for frontend file name display ──
         try:
