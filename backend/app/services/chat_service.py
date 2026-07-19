@@ -556,9 +556,10 @@ class ChatService:
             context_len = len(context)
 
             # Truncate context to stay within Groq free-tier input limits (12K
-            # TPM, ≈7K tokens).  Aggregate_search can produce many chunks;
-            # without this cap, the LLM call fails with 413.
-            MAX_CONTEXT_CHARS = 28000
+            # TPM).  Context + qa_prompt (~1.5K tokens) + system (~80) + question
+            # + history must stay under 12K tokens.  For Urdu-dense text, 16K
+            # chars ≈ 5K tokens, leaving safe margin.
+            MAX_CONTEXT_CHARS = 16000
             if len(context) > MAX_CONTEXT_CHARS:
                 kept_parts, kept_sources = [], []
                 total = 0

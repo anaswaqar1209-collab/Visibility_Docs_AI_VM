@@ -141,6 +141,19 @@ class ConversationService:
         if context:
             self.set_last_context(session_id, context)
 
+        # ── Trim history to stay within Groq free-tier TPM limits ──
+        # The full history is sent on every turn; without trimming it grows
+        # unbounded and eventually triggers a 413 "Request too large" error.
+        try:
+            hist = get_session_history(session_id or "default")
+            if hist is not None and len(hist.messages) > 6:
+                kept = hist.messages[-6:]
+                hist.clear()
+                for m in kept:
+                    hist.add_message(m)
+        except Exception:
+            pass
+
         chat_log.info(f"Invoking LangChain chain: model=llama-3.3-70b-versatile, followup={is_followup}")
         _logger.info(f"[CHAT] session={session_id}, context_len={len(context)}, is_followup={is_followup}")
         t0 = time.time()
