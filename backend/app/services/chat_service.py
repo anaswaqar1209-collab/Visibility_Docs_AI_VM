@@ -205,11 +205,25 @@ class ChatService:
                           "seller", "tax", "vat", "gst", "subtotal", "line item", "line items",
                           "amount due", "bill to", "ship to", "purchase order", "po", "total amount",
                           "رقم", "انوائس", "بل", "ٹوٹل", "وصولی"],
-        "sales_agent": ["rfq", "quotation", "quote", "suggestive", "required language",
+        "procurement_agent": ["rfq", "quotation", "quote", "suggestive", "required language",
                         "bid", "tender", "proposal", "procurement", "request for quotation",
                         "رقم", "کوٹیشن", "درخواست"],
         "legal_agent": ["contract", "agreement", "clause", "liability", "terms and conditions",
                         "legal", "party", "indemnity", "jurisdiction", "معاہدہ", "قانون"],
+    }
+
+    # Agent → retrieval-context anchor. Prepended (bilingual EN+UR) to the SEARCH
+    # query only (never to the model-facing question) so vector/keyword retrieval
+    # is steered toward the right domain vocabulary even when the user's wording or
+    # the document text lacks the agent's exact keywords. Purely additive — does not
+    # change routing, prompts, or existing behaviour.
+    AGENT_CONTEXT_ANCHORS = {
+        "finance_agent": "invoice financial document: invoice number, vendor, customer, subtotal, tax, total amount, due date, line items, payment terms | انوائس بل وصولی ٹوٹل رقم",
+        "hr_agent": "HR document: employee, resume, CV, candidate, salary, leave, appraisal, designation, department | ملازم ریزیومہ تنخواہ چھٹی تقرری",
+        "legal_agent": "legal document: contract, agreement, party, clause, indemnity, jurisdiction, liability, term | معاہدہ قانون شرط فریق",
+        "compliance_agent": "compliance document: audit report, SOP, certificate, finding, deviation, corrective action, pass/fail, standard | آڈٹ رپورٹ سرٹیفکیٹ خلاف ورزی",
+        "procurement_agent": "procurement document: purchase order, quotation, RFQ, supplier, vendor, delivery note, line items, total amount | خریداری آرڈر کوٹیشن سپلائر وینڈر بل",
+        "other_agent": "general document: summary, key points, parties, dates, references",
     }
 
     def _detect_query_agent(self, query: str) -> str | None:
@@ -352,8 +366,39 @@ class ChatService:
 
         sid, resolved_ids, is_first = self._get_or_create_session(session_id, organization_id, document_ids)
 
+        # ── Agent-context anchoring for retrieval (additive) ──
+        # Anchor the search query to the document's agent so retrieval works even
+        # when the user's wording (or the document text) lacks the agent's keywords
+        # (e.g. a Purchase Order that never says "quotation"). Only the retrieval
+        # query is augmented; the model still sees the original question.
+        anchor_agent = None
+        if resolved_ids:
+            try:
+                doc_result = SupabaseDB.select("documents",
+                    columns="id, document_type, phase3_agent",
+                    filters={"organization_id": organization_id},
+                )
+                doc_data = getattr(doc_result, "data", doc_result if isinstance(doc_result, list) else [])
+                resolved_set = set(resolved_ids)
+                _agent_counts = {}
+                for d in doc_data:
+                    if d.get("id") in resolved_set:
+                        p3a = d.get("phase3_agent") or DOCUMENT_TO_PHASE3_AGENT.get(d.get("document_type", ""), "other_agent")
+                        if p3a:
+                            _agent_counts[p3a] = _agent_counts.get(p3a, 0) + 1
+                if _agent_counts:
+                    anchor_agent = max(_agent_counts, key=_agent_counts.get)
+            except Exception:
+                pass
+        if not anchor_agent:
+            anchor_agent = self._detect_query_agent(question)
+
+        search_query = question
+        if anchor_agent and anchor_agent in self.AGENT_CONTEXT_ANCHORS:
+            search_query = f"{question} | {self.AGENT_CONTEXT_ANCHORS[anchor_agent]}"
+
         hybrid_kwargs = dict(
-            query=question,
+            query=search_query,
             organization_id=organization_id,
             document_type=document_type,
             phase3_agent=phase3_agent,
@@ -382,7 +427,7 @@ class ChatService:
         if is_cross_doc:
             chat_log.info(f"Cross-doc intent detected — using aggregate_search")
             search_results = rag_service.aggregate_search(
-                query=question,
+                query=search_query,
                 organization_id=organization_id,
                 document_ids=resolved_ids if resolved_ids else None,
                 max_docs=150,
@@ -761,8 +806,7 @@ class ChatService:
             qa_prompt += (
                 "\n10. The user's question is vague or ambiguous. At the end of your "
                 "answer, suggest 2-3 relevant counter-questions that would help clarify "
-                "what they want.  Put them under a '---' separator or label them "
-                "'Counter Questions:'.  Make them specific to the documents discussed."
+                "what they want.  Make them specific to the documents discussed."
             )
 
         chat_log.info(f"Built Q&A prompt for agent: {dominant_agent} ({len(qa_prompt)} chars)")

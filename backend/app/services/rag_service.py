@@ -559,30 +559,13 @@ def _markdown_aware_chunk(text: str, max_words: int = 250) -> list[dict]:
 
 class RAGService:
     def _expand_query(self, query: str) -> list[str]:
-        """Generate alternative search queries via LLM for better recall."""
-        if not query or len(query) < 3:
-            return []
-        try:
-            from .groq_service import groq_service
-            prompt = (
-                "Given the user's search query below, generate 2 alternative versions "
-                "that would match the same information need but use DIFFERENT words. "
-                "Return ONLY a JSON array of strings, nothing else.\n\n"
-                f"Query: {query}"
-            )
-            resp = groq_service.chat(
-                [{"role": "user", "content": prompt}],
-                temperature=0.3, max_tokens=256,
-                model="llama-3.1-8b-instant",
-            )
-            import json
-            alt = json.loads(resp.strip())
-            if isinstance(alt, list) and len(alt) > 0:
-                valid = [q for q in alt if isinstance(q, str) and q.strip() and q != query]
-                print(f"[SEARCH] Query expansion: '{query}' → {valid}")
-                return valid[:3]
-        except Exception as e:
-            print(f"[SEARCH] Query expansion failed: {e}")
+        """Query expansion is DISABLED.
+
+        The previous LLM-based expansion drifted meaning (e.g. "quotations"
+        became "famous sayings"), polluting retrieval and hurting answers.
+        Domain recall is now handled deterministically by
+        _expand_finance_query() and _expand_general_query().
+        """
         return []
 
     def _expand_finance_query(self, query: str) -> list[str]:
@@ -645,9 +628,11 @@ class RAGService:
             (("candidate", "applicant", "امیدوار"), ["candidate applicant experience"]),
             (("experience", "تجربہ"), ["work experience years skills"]),
             (("skills", "مہارت"), ["skills technical communication"]),
-            (("rfq", "quotation", "quote", "request for quotation", "کوٹیشن", "درخواست"), ["rfq quotation required language suggestive language"]),
-            (("suggestive", "suggestive language"), ["suggestive language example GSA"]),
-            (("required language", "required text"), ["required language English documentation"]),
+            (("rfq", "quotation", "quote", "request for quotation", "کوٹیشن", "درخواست"), ["vendor quotation supplier quote price quote", "rfq request for quotation", "quotation vendor name total amount"]),
+            (("purchase order", "po", "p.o."), ["purchase order po vendor supplier line items total"]),
+            (("supplier", "seller", "فروشندہ", "سپلائر"), ["supplier vendor name procurement document"]),
+            (("vendor", "vendor name", "وینڈر"), ["vendor supplier name procurement document"]),
+            (("delivery note", "delivery challan", "ڈیلیوری نوٹ"), ["delivery note received items quantity"]),
             (("contract", "agreement", "معاہدہ"), ["contract agreement terms clause"]),
             (("delivery", "deliver", "ترسیل"), ["delivery date days shipping"]),
             (("pricing", "price", "قیمت"), ["pricing structure cost total"]),
