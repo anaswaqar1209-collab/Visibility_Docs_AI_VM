@@ -286,6 +286,7 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
 
   return (
     <div className="flex-1 flex overflow-hidden">
+      <FolderTree docs={docs} orgId={orgId} token={token} />
       {/* document list */}
       <div className="w-[420px] shrink-0 flex flex-col border-r border-slate-200/50 bg-white">
         <div className="p-4 pb-1.5">
@@ -371,6 +372,197 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
   );
 }
 
+/* ════════════════════════════════════════
+   FOLDER TREE PANEL (agent → type → files)
+   Embedded in the Documents page, left of the doc list.
+   ════════════════════════════════════════ */
+function FolderTree({ docs, orgId, token }: any) {
+  const [search, setSearch] = useState("");
+
+  const getDocAgent = (d: any) => d.phase3_agent || DOC_TYPE_TO_AGENT[d.document_type] || "other_agent";
+
+  const q = search.trim().toLowerCase();
+  const tree: Record<string, Record<string, any[]>> = {};
+  for (const d of docs) {
+    if (q && !((d.title || "").toLowerCase().includes(q))) continue;
+    const agent = getDocAgent(d);
+    const type = d.document_type || "unclassified";
+    (tree[agent] ||= {})[type] ||= [];
+    tree[agent][type].push(d);
+  }
+
+  const agentOrder = AGENT_OPTIONS.filter(o => o.value).map(o => o.value);
+  const visibleAgents = agentOrder.filter(a => tree[a] && Object.keys(tree[a]).length > 0);
+
+  return (
+    <div className="w-[260px] shrink-0 flex flex-col border-r border-slate-200/50 bg-white">
+      <div className="p-3 border-b border-slate-200/50">
+        <p className="text-sm font-bold text-slate-800 mb-2">📁 Folders</p>
+        <div className="relative">
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            className="w-full pl-8 pr-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all"
+            placeholder="Search files..." />
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+        {visibleAgents.length === 0 && (
+          <p className="text-center text-xs text-slate-400 py-8">No documents</p>
+        )}
+        {visibleAgents.map(agent => {
+          const types = Object.keys(tree[agent]).sort((a, b) => {
+            if (a === "unclassified") return 1;
+            if (b === "unclassified") return -1;
+            return a.localeCompare(b);
+          });
+          const total = types.reduce((s, t) => s + tree[agent][t].length, 0);
+          return (
+            <details key={agent} className="rounded-lg border border-slate-200 overflow-hidden bg-white">
+              <summary className="px-3 py-2 cursor-pointer hover:bg-slate-50 transition-colors flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <span>{agentLabel(agent)}</span>
+                <span className="badge badge-xs bg-slate-100 text-slate-500 border-0">{total}</span>
+              </summary>
+              <div className="px-2 pb-2 space-y-1">
+                {types.map(type => (
+                  <details key={type} className="rounded-md bg-slate-50/60 border border-slate-100 overflow-hidden">
+                    <summary className="px-2.5 py-1.5 cursor-pointer hover:bg-slate-100 transition-colors flex items-center gap-2 text-xs font-medium text-slate-700">
+                      <span>📂 {DOC_TYPE_LABELS[type] || type}</span>
+                      <span className="badge badge-xs bg-white text-slate-500 border-0">{tree[agent][type].length}</span>
+                    </summary>
+                    <div className="px-2 pb-1.5 space-y-0.5">
+                      {tree[agent][type]
+                        .slice()
+                        .sort((a: any, b: any) => (a.title || "").localeCompare(b.title || ""))
+                        .map((d: any) => (
+                          <a key={d.id}
+                            href={`${API}/api/v1/documents/${d.id}/file?organization_id=${orgId}`}
+                            target="_blank"
+                            className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md hover:bg-white border border-transparent hover:border-slate-200 transition-all group">
+                            <span className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-slate-400 group-hover:text-indigo-500 text-xs">📄</span>
+                              <span className="text-xs text-slate-700 truncate">{d.title || d.original_file_url || "Untitled"}</span>
+                            </span>
+                            <span className="flex items-center gap-1 shrink-0">
+                              <span className={`badge badge-xs ${statusColor(d.status)}`}>{d.status}</span>
+                            </span>
+                          </a>
+                        ))}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════
+   CHAT FOLDER TREE (selection-enabled)
+   agent → type → file, with per-folder checkboxes
+   so the user can select a whole folder or one file.
+   ════════════════════════════════════════ */
+function ChatFolderTree({ docs, selectedDocs, onToggleDoc, onToggleFolder, searchQuery, orgId, token }: any) {
+  const selectedIds = new Set((selectedDocs || []).map((d: any) => d.id));
+  const getDocAgent = (d: any) => d.phase3_agent || DOC_TYPE_TO_AGENT[d.document_type] || "other_agent";
+
+  const q = (searchQuery || "").trim().toLowerCase();
+  const tree: Record<string, Record<string, any[]>> = {};
+  for (const d of docs) {
+    if (q && !((d.title || "").toLowerCase().includes(q))) continue;
+    const agent = getDocAgent(d);
+    const type = d.document_type || "unclassified";
+    (tree[agent] ||= {})[type] ||= [];
+    tree[agent][type].push(d);
+  }
+
+  const agentOrder = AGENT_OPTIONS.filter(o => o.value).map(o => o.value);
+  const visibleAgents = agentOrder.filter(a => tree[a] && Object.keys(tree[a]).length > 0);
+
+  const folderState = (arr: any[]) => {
+    const c = arr.filter((d: any) => selectedIds.has(d.id)).length;
+    return { checked: arr.length > 0 && c === arr.length, indeterminate: c > 0 && c < arr.length };
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {visibleAgents.length === 0 && (
+        <p className="text-center text-xs text-slate-400 py-6">No documents</p>
+      )}
+      {visibleAgents.map(agent => {
+        const types = Object.keys(tree[agent]).sort((a, b) => {
+          if (a === "unclassified") return 1;
+          if (b === "unclassified") return -1;
+          return a.localeCompare(b);
+        });
+        const agentDocs = types.flatMap(t => tree[agent][t]);
+        const ag = folderState(agentDocs);
+        return (
+          <details key={agent} className="rounded-lg border border-slate-200 overflow-hidden bg-white">
+            <summary className="px-2 py-2 cursor-pointer hover:bg-slate-50 transition-colors flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <input type="checkbox" checked={ag.checked}
+                ref={(el: any) => { if (el) el.indeterminate = ag.indeterminate; }}
+                onChange={() => onToggleFolder(agentDocs)}
+                onClick={e => e.stopPropagation()}
+                className="checkbox checkbox-xs rounded border-slate-300 [--chkbg:#6366f1] shrink-0" />
+              <span>{agentLabel(agent)}</span>
+              <span className="badge badge-xs bg-slate-100 text-slate-500 border-0 ml-auto">{agentDocs.length}</span>
+            </summary>
+            <div className="px-2 pb-2 space-y-1">
+              {types.map(type => {
+                const typeDocs = tree[agent][type];
+                const ty = folderState(typeDocs);
+                return (
+                  <details key={type} className="rounded-md bg-slate-50/60 border border-slate-100 overflow-hidden">
+                    <summary className="px-2 py-1.5 cursor-pointer hover:bg-slate-100 transition-colors flex items-center gap-2 text-xs font-medium text-slate-700">
+                      <input type="checkbox" checked={ty.checked}
+                        ref={(el: any) => { if (el) el.indeterminate = ty.indeterminate; }}
+                        onChange={() => onToggleFolder(typeDocs)}
+                        onClick={e => e.stopPropagation()}
+                        className="checkbox checkbox-xs rounded border-slate-300 [--chkbg:#6366f1] shrink-0" />
+                      <span>📂 {DOC_TYPE_LABELS[type] || type}</span>
+                      <span className="badge badge-xs bg-white text-slate-500 border-0 ml-auto">{typeDocs.length}</span>
+                    </summary>
+                    <div className="px-2 pb-1.5 space-y-0.5">
+                      {typeDocs
+                        .slice()
+                        .sort((a: any, b: any) => (a.title || "").localeCompare(b.title || ""))
+                        .map((d: any) => {
+                          const sel = selectedIds.has(d.id);
+                          return (
+                            <div key={d.id}
+                              className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md border transition-all
+                                ${sel ? "border-indigo-300 bg-indigo-50/60" : "border-transparent hover:bg-white hover:border-slate-200"}`}>
+                              <input type="checkbox" checked={sel}
+                                onChange={() => onToggleDoc(d.id)}
+                                className="checkbox checkbox-xs rounded border-slate-300 [--chkbg:#6366f1] shrink-0" />
+                              <label onClick={() => onToggleDoc(d.id)}
+                                className="text-xs text-slate-700 truncate flex-1 cursor-pointer">{d.title || d.original_file_url || "Untitled"}</label>
+                              <a href={`${API}/api/v1/documents/${d.id}/file?organization_id=${orgId}`} target="_blank"
+                                className="text-slate-300 hover:text-indigo-500 shrink-0 transition-colors" title="Open file">
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                </svg>
+                              </a>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ─────── doc type → agent mapping ─────── */
 const DOC_TYPE_TO_AGENT: Record<string, string> = {
   invoice: "finance_agent",
@@ -388,6 +580,25 @@ const DOC_TYPE_TO_AGENT: Record<string, string> = {
   maintenance_report: "compliance_agent",
   engineering_drawing: "compliance_agent",
   other: "other_agent",
+};
+
+const DOC_TYPE_LABELS: Record<string, string> = {
+  invoice: "Invoice",
+  financial_statement: "Financial Statement",
+  purchase_order: "Purchase Order",
+  quotation: "Quotation",
+  hr_document: "HR Document",
+  resume: "Resume",
+  transcript: "Transcript",
+  contract: "Contract",
+  sop: "SOP",
+  audit_report: "Audit Report",
+  quality_report: "Quality Report",
+  certificate: "Certificate",
+  maintenance_report: "Maintenance Report",
+  engineering_drawing: "Engineering Drawing",
+  other: "Other",
+  unclassified: "Unclassified",
 };
 
 function agentLabel(a: string) {
@@ -852,6 +1063,23 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
     );
   };
 
+  // Select (or deselect) every document inside a folder. If all are already
+  // selected the whole folder is removed; otherwise the whole folder is added.
+  const toggleFolder = (docsInFolder: any[]) => {
+    if (!docsInFolder || docsInFolder.length === 0) return;
+    setSelectedDocs((prev: any[]) => {
+      const selSet = new Set(prev.map((d: any) => d.id));
+      const allSelected = docsInFolder.every((d: any) => selSet.has(d.id));
+      if (allSelected) {
+        const removeSet = new Set(docsInFolder.map((d: any) => d.id));
+        return prev.filter((d: any) => !removeSet.has(d.id));
+      }
+      const merged = [...prev];
+      for (const d of docsInFolder) if (!selSet.has(d.id)) merged.push(d);
+      return merged;
+    });
+  };
+
   const send = async () => {
     const q = question.trim();
     if (!q || loading) return;
@@ -919,40 +1147,29 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
 
         {/* list */}
         <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
-          {/* docs section */}
+          {/* docs section: folder tree (agent → type → file) */}
           {showDocsList && (
             <>
-              {panelFilter === "all" && filteredDocs.length > 0 && (
-                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-1 pt-1 pb-0.5">Documents</p>
-              )}
               {docsLoading && [...Array(2)].map((_, i) => (
                 <div key={`s-${i}`} className="h-14 rounded-xl bg-slate-100 animate-pulse" />
               ))}
-              {filteredDocs.slice(0, panelFilter === "docs" ? 200 : 10).map((doc: any) => {
-                const isSel = selectedDocs.find((d: any) => d.id === doc.id);
-                return (
-                  <div key={doc.id}
-                    className={`flex items-center gap-2 p-2.5 rounded-xl border transition-all cursor-pointer
-                      ${isSel ? "border-indigo-300 bg-indigo-50/50" : "border-slate-200 bg-white hover:border-slate-300"}`}
-                    onClick={() => toggleDoc(doc.id)}>
-                    <input type="checkbox" checked={!!isSel}
-                      onChange={() => toggleDoc(doc.id)}
-                      className="checkbox checkbox-xs rounded border-slate-300 [--chkbg:#6366f1] shrink-0"
-                      onClick={e => e.stopPropagation()} />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-slate-800 truncate">{doc.title || "Untitled"}</p>
-                      <div className="flex gap-1 mt-0.5">
-                        <span className={`badge badge-xs ${typeColor(doc.document_type)}`}>{doc.document_type || "unknown"}</span>
-                        {doc.document_type === "resume" && doc.cv_score != null && (
-                          <span className={`badge badge-xs ${doc.cv_score >= 70 ? "badge-success" : doc.cv_score >= 40 ? "badge-warning" : "badge-error"}`}>
-                            {doc.cv_score}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+              {!docsLoading && filteredDocs.length > 0 && (
+                <ChatFolderTree
+                  docs={filteredDocs}
+                  selectedDocs={selectedDocs}
+                  onToggleDoc={toggleDoc}
+                  onToggleFolder={toggleFolder}
+                  searchQuery={searchQuery}
+                  orgId={orgId}
+                  token={token}
+                />
+              )}
+              {!docsLoading && filteredDocs.length === 0 && (
+                <div className="text-center py-8 text-slate-400">
+                  <p className="text-2xl mb-1">📄</p>
+                  <p className="text-xs font-medium">No documents</p>
+                </div>
+              )}
             </>
           )}
 
@@ -991,12 +1208,6 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
             </>
           )}
 
-          {panelFilter === "docs" && filteredDocs.length === 0 && !docsLoading && (
-            <div className="text-center py-8 text-slate-400">
-              <p className="text-2xl mb-1">📄</p>
-              <p className="text-xs font-medium">No documents</p>
-            </div>
-          )}
         </div>
       </div>
 
