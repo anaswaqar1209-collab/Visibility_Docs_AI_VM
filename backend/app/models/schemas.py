@@ -86,7 +86,7 @@ class SearchRequest(BaseModel):
     status: Optional[str] = None
     date_from: Optional[str] = None
     date_to: Optional[str] = None
-    limit: int = 20
+    limit: int = 50
     offset: int = 0
 
 

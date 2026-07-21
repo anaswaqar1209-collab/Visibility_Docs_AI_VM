@@ -596,7 +596,7 @@ class ChatService:
             date_from=date_from,
             date_to=date_to,
             document_ids=resolved_ids if resolved_ids else None,
-            limit=20,
+            limit=50,
         )
 
         # ── Cross-document intent detection ──
@@ -832,8 +832,8 @@ class ChatService:
             # Truncate context to stay within Groq free-tier input limits (12K
             # TPM).  Context + qa_prompt (~1.5K tokens) + system (~80) + question
             # + history must stay under 12K tokens.  For Urdu-dense text, 16K
-            # chars ≈ 5K tokens, leaving safe margin.
-            MAX_CONTEXT_CHARS = 16000
+            # chars ≈ 5K tokens, leaving safe margin. 28K chars ~ 8.8K tokens.
+            MAX_CONTEXT_CHARS = 28000
             if len(context) > MAX_CONTEXT_CHARS:
                 kept_parts, kept_sources = [], []
                 total = 0

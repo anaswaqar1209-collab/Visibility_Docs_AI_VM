@@ -1314,7 +1314,7 @@ class RAGService:
     def hybrid_search(self, query: str, organization_id: str, document_type: str = None,
                       phase3_agent: str = None, status: str = None,
                       date_from: str = None, date_to: str = None,
-                      document_ids: list = None, limit: int = 20, offset: int = 0) -> list[dict]:
+                      document_ids: list = None, limit: int = 50, offset: int = 0) -> list[dict]:
         from .orchestration_logger import get_chat_logger
         chat_log = get_chat_logger()
 

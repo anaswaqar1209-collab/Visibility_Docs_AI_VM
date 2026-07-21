@@ -67,7 +67,7 @@ async def search_get(
     status: str = Query(None, description="Filter by document status"),
     date_from: str = Query(None, description="Start date (ISO format)"),
     date_to: str = Query(None, description="End date (ISO format)"),
-    limit: int = Query(20, ge=1, le=100, description="Max results"),
+    limit: int = Query(50, ge=1, le=200, description="Max results"),
     offset: int = Query(0, ge=0, description="Result offset"),
 ):
     return await search_documents(SearchRequest(
