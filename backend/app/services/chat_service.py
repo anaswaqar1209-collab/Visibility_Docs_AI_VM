@@ -804,10 +804,11 @@ class ChatService:
                             # Extract filename from URL; fall back to title or doc ID
                             fname = self._filename_from_url(url) if url else ""
                             id_to_display[rid] = fname or title or rid
-                            # Also attach file_url to sources for frontend
+                            # Also attach file_url + display_name to sources for frontend
                             for s in sources:
                                 if s["document_id"] == rid:
                                     s["file_url"] = url
+                                    s["display_name"] = id_to_display[rid]
         except Exception:
             pass
 

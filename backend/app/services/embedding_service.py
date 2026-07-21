@@ -132,7 +132,7 @@ class EmbeddingService:
                         cm = chunk_metadata[i]
                         if cm.get("heading"):
                             meta["heading"] = cm["heading"]
-                        if cm.get("page_number"):
+                        if cm.get("page_number") is not None:
                             meta["page_number"] = cm["page_number"]
                         if cm.get("document_type"):
                             meta["document_type"] = cm["document_type"]

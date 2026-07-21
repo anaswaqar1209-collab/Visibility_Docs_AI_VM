@@ -1109,6 +1109,38 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
     });
   };
 
+  const renderAnswerWithLinks = (text: string, msgSources: any[]) => {
+    const nameMap = new Map<string, any>();
+    msgSources.forEach(s => {
+      const name = (s.display_name || s.document_title || "").toLowerCase();
+      if (name) nameMap.set(name, s);
+    });
+    const refRe = /\[([^\]]+?)\s+page\s+(\d+)\]/gi;
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = refRe.exec(text)) !== null) {
+      if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+      const filename = match[1];
+      const page = match[2];
+      const source = nameMap.get(filename.toLowerCase());
+      if (source) {
+        parts.push(
+          <a key={match.index}
+            href={`${API}/api/v1/documents/${source.document_id}/file?organization_id=${orgId}&page=${page}`}
+            target="_blank"
+            className="text-indigo-600 underline hover:text-indigo-800 font-medium"
+          >{filename} p.{page}</a>
+        );
+      } else {
+        parts.push(match[0]);
+      }
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+    return parts.length > 0 ? parts : text;
+  };
+
   const send = async () => {
     const q = question.trim();
     if (!q || loading) return;
@@ -1311,39 +1343,32 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
                     <p className="text-sm leading-relaxed whitespace-pre-wrap">{m.content}</p>
                   </div>
                 ) : (
-                  <div>
-                    <div className="flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-xl gradient-primary flex items-center justify-center shadow-md shrink-0 mt-0.5">
-                        <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
-                        </svg>
-                      </div>
-                      <div className="px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200/60 shadow-sm" data-role="assistant">
-                        <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">{m.content}</p>
-                      </div>
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-xl gradient-primary flex items-center justify-center shadow-md shrink-0 mt-0.5">
+                      <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+                      </svg>
                     </div>
-                    {isLastAssistant && sources.length > 0 && (
-                      <div className="mt-2 space-y-1.5 pl-11">
-                        {sources.map((s: any, si: number) => (
-                          <a key={si}
-                            href={`${API}/api/v1/documents/${s.document_id}/file?organization_id=${orgId}&page=${s.page_number || 0}`}
-                            target="_blank"
-                            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-300 hover:bg-indigo-50/30 transition-all no-underline group">
-                            <div className="shrink-0 w-6 h-6 rounded-lg bg-red-50 border border-red-200 flex items-center justify-center text-red-500 group-hover:bg-red-100 transition-colors">
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                              </svg>
-                            </div>
-                            <span className="flex-1 text-xs font-medium text-slate-700 group-hover:text-indigo-700 truncate">
-                              {s.document_title || s.document_id?.slice(0, 8)}
-                            </span>
-                            <span className="text-[10px] text-slate-400 shrink-0">
-                              {s.page_number ? `p.${s.page_number}` : `${(s.score * 100).toFixed(0)}%`}
-                            </span>
-                          </a>
-                        ))}
-                      </div>
-                    )}
+                    <div className="px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200/60 shadow-sm" data-role="assistant">
+                      <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">{renderAnswerWithLinks(m.content, isLastAssistant ? sources : [])}</p>
+                      {isLastAssistant && sources.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-slate-200/60 space-y-1.5">
+                          {sources.map((s: any, si: number) => (
+                            <a key={si}
+                              href={`${API}/api/v1/documents/${s.document_id}/file?organization_id=${orgId}&page=${s.page_number || 0}`}
+                              target="_blank"
+                              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30 transition-all no-underline group">
+                              <span className="flex-1 text-xs font-medium text-slate-700 group-hover:text-indigo-700 truncate">
+                                {s.document_title || s.document_id?.slice(0, 8)}
+                              </span>
+                              <span className="text-[10px] text-slate-400 shrink-0">
+                                {s.page_number ? `p.${s.page_number}` : `${(s.score * 100).toFixed(0)}%`}
+                              </span>
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1545,6 +1570,38 @@ function SearchSection({ showToast, orgId, token, onOpenDoc }: any) {
     doSearch(offset + 20);
   };
 
+  const renderAnswerWithLinks = (text: string, msgSources: any[]) => {
+    const nameMap = new Map<string, any>();
+    msgSources.forEach(s => {
+      const name = (s.display_name || s.document_title || "").toLowerCase();
+      if (name) nameMap.set(name, s);
+    });
+    const refRe = /\[([^\]]+?)\s+page\s+(\d+)\]/gi;
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = refRe.exec(text)) !== null) {
+      if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+      const filename = match[1];
+      const page = match[2];
+      const source = nameMap.get(filename.toLowerCase());
+      if (source) {
+        parts.push(
+          <a key={match.index}
+            href={`${API}/api/v1/documents/${source.document_id}/file?organization_id=${orgId}&page=${page}`}
+            target="_blank"
+            className="text-indigo-600 underline hover:text-indigo-800 font-medium"
+          >{filename} p.{page}</a>
+        );
+      } else {
+        parts.push(match[0]);
+      }
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+    return parts.length > 0 ? parts : text;
+  };
+
   /* ── chat send ── */
   const sendChat = async () => {
     const q = chatInput.trim();
@@ -1740,7 +1797,9 @@ function SearchSection({ showToast, orgId, token, onOpenDoc }: any) {
               </div>
             </div>
           )}
-          {messages.map((m, i) => (
+          {messages.map((m, i) => {
+            const isLastAssistant = m.role === "assistant" && i === messages.length - 1;
+            return (
             <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"} message-appear`}>
               <div className={`max-w-[80%] ${m.role === "user" ? "" : ""}`}>
                 {m.role === "user" ? (
@@ -1755,13 +1814,14 @@ function SearchSection({ showToast, orgId, token, onOpenDoc }: any) {
                       </svg>
                     </div>
                     <div className="px-3.5 py-2.5 rounded-2xl bg-slate-50 border border-slate-200/60 shadow-sm">
-                      <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">{m.content}</p>
+                      <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">{renderAnswerWithLinks(m.content, isLastAssistant ? sources : [])}</p>
                     </div>
                   </div>
                 )}
               </div>
             </div>
-          ))}
+            );
+          })}
           {chatLoading && (
             <div className="flex justify-start message-appear">
               <div className="flex items-start gap-2">

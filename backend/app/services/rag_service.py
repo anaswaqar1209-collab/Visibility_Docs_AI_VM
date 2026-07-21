@@ -21,6 +21,16 @@ def _get_patterns():
 
 # Field-label detection: lines like "Suggestive Language:", "Required Language:",
 # "Example:", "Note:", "Background:" etc. that act as sub-headings inside a section.
+_PAGE_MARKER_RE = re.compile(r'<!--\s*Page\s+(\d+)\s*-->')
+
+def _extract_page_from_content(text: str, default: int = None) -> int | None:
+    """Extract the page number from a chunk's content by scanning for ``<!-- Page N -->`` markers."""
+    matches = _PAGE_MARKER_RE.findall(text)
+    if matches:
+        return int(matches[0])
+    return default
+
+
 _LABEL_COLON_RE = None
 _TITLECASE_RE = None
 
@@ -1074,9 +1084,10 @@ class RAGService:
                 m = _re.match(r'^(\d+(?:\.\d+)*)', heading.strip())
                 if m:
                     sec_num = m.group(1)
+            chunk_page = _extract_page_from_content(c["content"], page_number)
             chunk_metadata.append({
                 "heading": heading,
-                "page_number": page_number,
+                "page_number": chunk_page,
                 "document_type": document_type,
                 "section": c.get("chunk_type", ""),
                 "section_number": sec_num,
@@ -1106,7 +1117,7 @@ class RAGService:
                 chunk_records.append({
                     "organization_id": organization_id,
                     "document_id": document_id,
-                    "page_id": page_number,
+                    "page_id": cm.get("page_number"),
                     "chunk_index": chunk.get("chunk_index", 0),
                     "chunk_type": ctype,
                     "heading": heading,
@@ -1603,6 +1614,13 @@ class RAGService:
                 per_doc[did] = per_doc.get(did, 0) + 1
                 capped.append(r)
             results = capped
+
+        # ── Enrich missing page numbers from chunk content ──
+        for r in results:
+            if r.get("page_number") is None:
+                pn = _extract_page_from_content(r.get("chunk_text", ""))
+                if pn:
+                    r["page_number"] = pn
 
         final = results[offset:offset + limit]
         chat_log.info(f"Total after RRF+filter: {len(final)} chunks (from {len(results)} unique)")
