@@ -141,13 +141,28 @@ class ConversationService:
         if context:
             self.set_last_context(session_id, context)
 
+        # ── Inject last assistant response for conversational continuity ──
+        # Make the previous answer visible in the primary context (not just
+        # the `history` placeholder) so the model always attends to it.
+        if context:
+            try:
+                h = get_session_history(session_id or "default")
+                for m in reversed(h.messages):
+                    if isinstance(m, AIMessage):
+                        txt = m.content.strip()
+                        if txt and txt not in context:
+                            context += f"\n--\n[Previous Response]\n{txt}\n[/Previous Response]"
+                        break
+            except Exception:
+                pass
+
         # ── Trim history to stay within Groq free-tier TPM limits ──
         # The full history is sent on every turn; without trimming it grows
         # unbounded and eventually triggers a 413 "Request too large" error.
         try:
             hist = get_session_history(session_id or "default")
-            if hist is not None and len(hist.messages) > 6:
-                kept = hist.messages[-6:]
+            if hist is not None and len(hist.messages) > 16:
+                kept = hist.messages[-16:]
                 hist.clear()
                 for m in kept:
                     hist.add_message(m)

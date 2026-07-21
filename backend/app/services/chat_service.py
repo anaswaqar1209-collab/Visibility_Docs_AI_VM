@@ -173,7 +173,12 @@ class ChatService:
                 for key, val in parsed.items():
                     if key.startswith("_"):
                         continue
-                    if isinstance(val, str) and val:
+                    array_keys = {"findings", "deviations", "corrective_actions", "observations", "recommendations"}
+                    if isinstance(val, list) and val and key in array_keys:
+                        lines.append(f"    {key}:")
+                        for i, item in enumerate(val, 1):
+                            lines.append(f"      {i}. {item}")
+                    elif isinstance(val, str) and val:
                         lines.append(f"    {key}: {val}")
                     elif isinstance(val, (int, float)):
                         lines.append(f"    {key}: {val}")
@@ -210,6 +215,33 @@ class ChatService:
                         "رقم", "کوٹیشن", "درخواست"],
         "legal_agent": ["contract", "agreement", "clause", "liability", "terms and conditions",
                         "legal", "party", "indemnity", "jurisdiction", "معاہدہ", "قانون"],
+        "compliance_agent": ["audit", "audit report", "finding", "findings", "corrective action",
+                             "compliance", "non-compliance", "non compliance", "sop", "procedure",
+                             "certificate", "certification", "quality report", "qc", "maintenance",
+                             "inspection", "safety", "regulatory", "standard operating",
+                             "deviation", "pass fail", "آڈٹ", "سرٹیفکیٹ", "کوالٹی", "مرمت",
+                             "حفاظت", "طریقہ کار", "تعمیل", "خلاف ورزی", "معائنہ"],
+    }
+
+    # Keyword → document_type map for query-type detection (org-wide chat).
+    # If the user's question contains one of these (EN or UR), retrieval is
+    # restricted to documents of that type; if none match, all docs are searched.
+    KEYWORD_TO_DOC_TYPE = {
+        "invoice": ["invoice", "inv ", "inv.", "bill", "انوائس", "بل", "رسید"],
+        "purchase_order": ["purchase order", "po ", "p.o.", "خریداری", "خریداری آرڈر"],
+        "quotation": ["quotation", "quote", "rfq", "request for quotation", "کوٹیشن", "درخواست"],
+        "contract": ["contract", "agreement", "معاہدہ", "قانون", "شرط"],
+        "resume": ["resume", "cv", "c.v.", "bio data", "بائیو ڈیٹا", "ریزیومہ", "امیدوار"],
+        "transcript": ["transcript", "نتیجہ", "رزلٹ", "transcripts"],
+        "hr_document": ["hr document", "employee record", "ملازم", "اسناد ملازمین"],
+        "certificate": ["certificate", "سرٹیفکیٹ", "سند"],
+        "audit_report": ["audit", "audit report", "آڈٹ", "آڈٹ رپورٹ"],
+        "quality_report": ["quality report", "کوالٹی", "معیاری رپورٹ"],
+        "maintenance_report": ["maintenance report", "دیکھ بھال", "مرمت"],
+        "sop": ["sop", "standard operating", "ایس او پی", "ایسوپی"],
+        "engineering_drawing": ["engineering drawing", "نقشہ", "ڈرائنگ", "انجینئرنگ ڈرائنگ"],
+        "financial_statement": ["financial statement", "balance sheet", "پروفٹ", "مالیاتی بیان"],
+        "other": ["other", "general", "عام", "general document"],
     }
 
     # Agent → retrieval-context anchor. Prepended (bilingual EN+UR) to the SEARCH
@@ -221,7 +253,7 @@ class ChatService:
         "finance_agent": "invoice financial document: invoice number, vendor, customer, subtotal, tax, total amount, due date, line items, payment terms | انوائس بل وصولی ٹوٹل رقم",
         "hr_agent": "HR document: employee, resume, CV, candidate, salary, leave, appraisal, designation, department | ملازم ریزیومہ تنخواہ چھٹی تقرری",
         "legal_agent": "legal document: contract, agreement, party, clause, indemnity, jurisdiction, liability, term | معاہدہ قانون شرط فریق",
-        "compliance_agent": "compliance document: audit report, SOP, certificate, finding, deviation, corrective action, pass/fail, standard | آڈٹ رپورٹ سرٹیفکیٹ خلاف ورزی",
+        "compliance_agent": "compliance document: audit report, SOP, certificate, quality report, maintenance report, engineering drawing, finding, deviation, corrective action, pass/fail, standard, non-conformance, inspection, safety | آڈٹ رپورٹ سرٹیفکیٹ کوالٹی رپورٹ مرمت رپورٹ خلاف ورزی ایس او پی معائنہ حفاظت",
         "procurement_agent": "procurement document: purchase order, quotation, RFQ, supplier, vendor, delivery note, line items, total amount | خریداری آرڈر کوٹیشن سپلائر وینڈر بل",
         "other_agent": "general document: summary, key points, parties, dates, references",
     }
@@ -244,6 +276,30 @@ class ChatService:
             return None
         # Only commit if a single intent clearly dominates (no tie)
         ranked = sorted(scores.items(), key=lambda x: -x[1])
+        if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+            return None
+        return ranked[0][0]
+
+    def detect_doc_type_keyword(self, query: str) -> str | None:
+        """Detect a document_type from query keywords (bilingual EN+UR).
+
+        Used for org-wide chat: if the user's question mentions a type (e.g.
+        'invoice', 'quotation', 'ریزیومہ'), retrieval is restricted to documents
+        of that type. Returns the best-matching document_type, or None when no
+        keyword matches (or multiple types tie) so the caller searches all docs.
+        """
+        q = (query or "").lower()
+        if not q:
+            return None
+        scores = {}
+        for doc_type, kws in self.KEYWORD_TO_DOC_TYPE.items():
+            hits = sum(1 for kw in kws if kw in q)
+            if hits:
+                scores[doc_type] = hits
+        if not scores:
+            return None
+        ranked = sorted(scores.items(), key=lambda x: -x[1])
+        # Tie between the top two types → ambiguous → search all docs
         if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
             return None
         return ranked[0][0]
@@ -356,15 +412,139 @@ class ChatService:
                     lines.append(f"  [Document: {display}]: (empty)")
         return "\n".join(lines)
 
+    def _fetch_resume_details(self, doc_ids: list[str], organization_id: str) -> dict[str, dict]:
+        """Batch-fetch the full extracted_data for resume documents.
+        Returns {doc_id: {skills, total_experience_years, education, certifications,
+                          cv_evaluation{overall_score, strengths, recommendation, ...}}}."""
+        if not doc_ids:
+            return {}
+        try:
+            import json
+            from ..database import _get_supabase, _use_supabase, _local_select_in
+            unique_ids = list(set(doc_ids))
+            client = _get_supabase()
+            if _use_supabase and client:
+                r = client.table("document_extractions") \
+                    .select("document_id, extracted_data") \
+                    .in_("document_id", unique_ids) \
+                    .eq("organization_id", organization_id) \
+                    .execute()
+                rows = getattr(r, "data", [])
+            else:
+                rows = _local_select_in("document_extractions",
+                    columns="document_id, extracted_data",
+                    filters={"organization_id": organization_id},
+                    in_column="document_id", in_values=unique_ids)
+            result = {}
+            for row in rows:
+                raw = row.get("extracted_data", "{}")
+                if isinstance(raw, str):
+                    try:
+                        parsed = json.loads(raw)
+                    except Exception:
+                        continue
+                else:
+                    parsed = raw or {}
+                did = row.get("document_id", "")
+                if not did:
+                    continue
+                detail = {}
+                skills = parsed.get("skills")
+                if skills and isinstance(skills, list):
+                    detail["skills"] = skills
+                exp_y = parsed.get("total_experience_years")
+                if exp_y is not None:
+                    detail["total_experience_years"] = exp_y
+                edu = parsed.get("education")
+                if edu and isinstance(edu, list):
+                    detail["education"] = edu
+                certs = parsed.get("certifications")
+                if certs and isinstance(certs, list):
+                    detail["certifications"] = certs
+                ev = parsed.get("cv_evaluation") or {}
+                cv_d = {}
+                for k in ("overall_score", "strengths", "recommendation",
+                          "evaluation_summary", "skills_score",
+                          "experience_score", "education_score"):
+                    v = ev.get(k)
+                    if v is not None:
+                        cv_d[k] = v
+                if cv_d:
+                    detail["cv_evaluation"] = cv_d
+                if detail:
+                    result[did] = detail
+            return result
+        except Exception:
+            return {}
+
+    def _build_resume_details_block(self, resumes: list[dict],
+                                     details: dict[str, dict]) -> str:
+        """Build a compact [Resume Details] block with skills, experience, education, etc."""
+        if not details:
+            return ""
+        lines = ["[Resume Details]"]
+        for r in resumes:
+            did = r["id"]
+            d = details.get(did)
+            if not d:
+                continue
+            title = r.get("title") or r.get("original_filename") or did[:8]
+            parts = [f"  {title}"]
+            cv_ev = d.get("cv_evaluation") or {}
+            score = cv_ev.get("overall_score")
+            if score is not None:
+                parts.append(f"Score: {score}/100")
+            skills = d.get("skills")
+            if skills:
+                parts.append(f"Skills: {', '.join(skills[:8])}")
+            exp_y = d.get("total_experience_years")
+            if exp_y is not None:
+                parts.append(f"Exp: {exp_y}yrs")
+            edu = d.get("education")
+            if edu:
+                degs = []
+                for e in edu[:2]:
+                    deg = e.get("degree", "")
+                    inst = e.get("institution", "")
+                    if deg and inst:
+                        degs.append(f"{deg} - {inst}")
+                    elif deg:
+                        degs.append(deg)
+                    elif inst:
+                        degs.append(inst)
+                if degs:
+                    parts.append(f"Education: {' | '.join(degs)}")
+            certs = d.get("certifications")
+            if certs:
+                parts.append(f"Certs: {', '.join(certs[:3])}")
+            strengths = cv_ev.get("strengths")
+            if strengths:
+                parts.append(f"Strengths: {' | '.join(strengths[:3])}")
+            lines.append("  " + " — ".join(parts))
+        if len(lines) > 1:
+            return "\n".join(lines)
+        return ""
+
     def chat_with_document(self, question: str, document_ids: list, organization_id: str,
                            document_type: str = None, phase3_agent: str = None,
                            status: str = None, date_from: str = None, date_to: str = None,
-                           chat_history: list[dict] = None, session_id: str = None) -> dict:
+                           chat_history: list[dict] = None, session_id: str = None,
+                           selected_text: str = None) -> dict:
         chat_log = get_chat_logger()
         chat_log.chat_start(question, session_id=session_id or "", doc_count=len(document_ids or []))
         t_start = time.time()
 
         sid, resolved_ids, is_first = self._get_or_create_session(session_id, organization_id, document_ids)
+
+        # ── Focused Q&A on a selected excerpt (ChatGPT-style "ask about this") ──
+        # If the user highlighted part of a previous response and asked about it,
+        # ground the answer STRICTLY on that excerpt — no document retrieval. This
+        # keeps the answer tightly scoped to exactly what the user pointed at.
+        if selected_text and selected_text.strip():
+            return self._answer_on_excerpt(
+                question=question, selected_text=selected_text.strip(),
+                organization_id=organization_id, sid=sid, is_first=is_first,
+            )
 
         # ── Agent-context anchoring for retrieval (additive) ──
         # Anchor the search query to the document's agent so retrieval works even
@@ -397,6 +577,16 @@ class ChatService:
         if anchor_agent and anchor_agent in self.AGENT_CONTEXT_ANCHORS:
             search_query = f"{question} | {self.AGENT_CONTEXT_ANCHORS[anchor_agent]}"
 
+        # ── Keyword → document_type filter (org-wide chat only) ──
+        # If the question mentions a document type (e.g. 'invoice', 'quotation',
+        # 'ریزیومہ'), restrict retrieval to those files. Only applied when no
+        # specific document is selected (org-wide) and nothing explicit was passed;
+        # if no keyword matches, document_type stays None → search all docs.
+        detected_doc_type = self.detect_doc_type_keyword(question)
+        apply_type_filter = bool(detected_doc_type) and not resolved_ids and not document_type
+        if apply_type_filter:
+            document_type = detected_doc_type
+
         hybrid_kwargs = dict(
             query=search_query,
             organization_id=organization_id,
@@ -424,16 +614,47 @@ class ChatService:
                 if any(w in _CROSS_DOC_WORDS for w in words):
                     is_cross_doc = True
 
+        type_ids = []
         if is_cross_doc:
             chat_log.info(f"Cross-doc intent detected — using aggregate_search")
+            target_ids = resolved_ids
+            if apply_type_filter:
+                try:
+                    type_res = SupabaseDB.select(
+                        "documents", columns="id",
+                        filters={"organization_id": organization_id, "document_type": detected_doc_type},
+                    )
+                    type_rows = getattr(type_res, "data", type_res if isinstance(type_res, list) else [])
+                    type_ids = [r["id"] for r in type_rows if isinstance(r, dict)]
+                    if type_ids:
+                        target_ids = type_ids
+                        chat_log.info(f"Keyword '{detected_doc_type}' → restricting cross-doc search to {len(type_ids)} docs")
+                except Exception:
+                    pass
             search_results = rag_service.aggregate_search(
                 query=search_query,
                 organization_id=organization_id,
-                document_ids=resolved_ids if resolved_ids else None,
+                document_ids=target_ids if target_ids else None,
                 max_docs=150,
             )
+            # Keyword matched but that type has no (matching) docs → retry across
+            # ALL org docs so the user still gets an answer from other files.
+            if not search_results and apply_type_filter:
+                chat_log.warn(f"No results for type '{detected_doc_type}' — retrying across all docs")
+                search_results = rag_service.aggregate_search(
+                    query=search_query,
+                    organization_id=organization_id,
+                    document_ids=resolved_ids if resolved_ids else None,
+                    max_docs=150,
+                )
         else:
             search_results = rag_service.hybrid_search(**hybrid_kwargs)
+
+        # Documents to pull the structured extraction summary from: a selected
+        # doc takes priority; otherwise, when a keyword type filter is active
+        # (org-wide chat), use the matched-type documents so aggregate/finance
+        # questions see authoritative totals (mirrors single-doc behaviour).
+        extraction_doc_ids = resolved_ids if resolved_ids else (type_ids if (apply_type_filter and type_ids) else None)
 
         # ── Field-type detection (phone, email, amount, date) ──
         # When the query asks for specific field values from all docs, build a
@@ -488,12 +709,19 @@ class ChatService:
                         "score": r.get("cv_score", 0) / 100.0,
                     })
                 resume_context = "\n".join(lines)
+                # Also inject rich resume details (skills, experience, education, certs)
+                res_doc_ids = [r["id"] for r in resumes if r.get("id")]
+                res_details = self._fetch_resume_details(res_doc_ids, organization_id)
+                if res_details:
+                    details_block = self._build_resume_details_block(resumes, res_details)
+                    if details_block:
+                        resume_context = resume_context + "\n\n" + details_block
 
             # If search returned nothing but we are clearly in finance/invoice mode,
             # answer directly from structured extraction data when available.
             finance_context = ""
-            if is_finance_query and resolved_ids:
-                finance_context = self._fetch_extraction_summary(resolved_ids, organization_id)
+            if is_finance_query and extraction_doc_ids:
+                finance_context = self._fetch_extraction_summary(extraction_doc_ids, organization_id)
             if finance_context:
                 chat_log.search_strategy("Structured Extraction Fallback", "no vector matches, using invoice metadata")
                 finance_prompt = (
@@ -512,7 +740,7 @@ class ChatService:
                 return {
                     "answer": answer,
                     "sources": [],
-                    "document_id": resolved_ids[0] if resolved_ids else "",
+                    "document_id": extraction_doc_ids[0] if extraction_doc_ids else "",
                     "history": conversation_service.get_history(sid),
                     "session_id": sid,
                 }
@@ -641,16 +869,24 @@ class ChatService:
                 resume_block = "\n".join(lines)
                 context = resume_block + "\n\n" + context if context else resume_block
                 chat_log.info(f"Injected {len(resumes)} resume scores into context")
+                # Also inject rich resume details (skills, experience, education, certs)
+                res_doc_ids = [r["id"] for r in resumes if r.get("id")]
+                res_details = self._fetch_resume_details(res_doc_ids, organization_id)
+                if res_details:
+                    details_block = self._build_resume_details_block(resumes, res_details)
+                    if details_block:
+                        context = context + "\n\n" + details_block if context else details_block
+                        chat_log.info(f"Injected resume details for {len(res_details)} resumes")
 
         # ── Structured extraction summary for aggregate/multi-doc queries ──
         is_aggregate_query = any(
             __import__("re").search(kw, q_lower) for kw in _AGGREGATE_KEYWORDS
         )
-        if (is_aggregate_query or is_finance_query) and resolved_ids:
-            extraction_summary = self._fetch_extraction_summary(resolved_ids, organization_id)
+        if (is_aggregate_query or is_finance_query) and extraction_doc_ids:
+            extraction_summary = self._fetch_extraction_summary(extraction_doc_ids, organization_id)
             if extraction_summary:
                 context = extraction_summary + "\n\n" + context if context else extraction_summary
-                chat_log.info(f"Injected structured extraction summary for {len(resolved_ids)} documents")
+                chat_log.info(f"Injected structured extraction summary for {len(extraction_doc_ids)} documents")
 
         chat_log.search_strategy("Context Building", f"{len(search_results)} chunks → {context_len} chars")
         doc_types_seen = {}
@@ -718,17 +954,12 @@ class ChatService:
             if is_finance_query or dominant_agent == "finance_agent":
                 qa_prompt = (
                     "You are the Finance Agent for Visibility Docs AI, answering questions about invoices and other financial documents.\n\n"
-                    "Use ONLY the provided context. Prefer the structured extraction summary when it exists, because it contains exact extracted fields.\n\n"
-                    "Rules:\n"
-                    "0. Always answer in the same language as the user's question — Urdu/Saraiki question → Urdu answer, English question → English answer.\n"
-                    "1. Answer in detail — include exact values for invoice number, dates, vendor, customer, subtotal, tax, total, due date, payment terms, line items, and any other relevant fields.\n"
-                    "2. For invoice questions, use exact values for all fields.\n"
-                    "3. Keep currency symbols and units intact.\n"
-                    "4. If the answer is not present, say \"I cannot find this information in the documents.\"\n"
-                    "5. If there is a mismatch between structured data and raw text, mention it briefly.\n"
-                    "6. Do not invent values.\n"
-                    "7. If line items are present, list them cleanly and include quantities/prices when available.\n"
-                    "8. Do not output JSON.\n"
+                    "Always respond in the same language as the user's question. Use ONLY the provided context. "
+                    "When a structured extraction summary is present, prefer it — it contains exact extracted values.\n\n"
+                    "Answer in detail: include exact invoice numbers, dates, vendor and customer names, subtotal, tax, total, "
+                    "due date, payment terms, and line items with quantities and prices. Keep currency symbols and units intact. "
+                    "If the answer is not in the context, say so. If line items are present, list them cleanly. "
+                    "When structured data and raw text disagree, mention it briefly. Do not invent values.\n"
                 )
             else:
                 raw_prompt = _load_phase3_prompt(f"{dominant_agent}.md")
@@ -745,17 +976,15 @@ class ChatService:
                     # Remove the now-unnecessary "Document text:" line
                     qa_prompt = qa_prompt.replace("\nDocument text:\n{context}", "")
                     qa_prompt += (
-                        "\n\nRules:\n"
-                        "0. Always answer in the same language as the user's question — Urdu/Saraiki question → Urdu answer, English question → English answer.\n"
-                        "1. Answer in detail using the context — include relevant skills, experience, qualifications, and supporting evidence.\n"
-                        "2. If the context contains image/vision descriptions, use them to answer.\n"
-                        "3. If the answer is NOT in the context, say \"I cannot find this information in the documents.\"\n"
-                        "4. Do NOT make up or hallucinate information.\n"
-                        "5. Do NOT output JSON or extract fields — just answer the question naturally.\n"
-                        "6. If the context has tables or diagrams, explain what they show.\n"
+                        "\n\nAnswer naturally in the same language as the user's question. "
+                        "Base your reply on the provided context — include relevant skills, experience, "
+                        "qualifications, and supporting evidence. If the context contains image descriptions, "
+                        "use them. If the answer is not in the context, say so. "
+                        "If there are tables or diagrams, explain what they show. "
+                        "Do not make up information.\n"
                     )
                     resume_rank_instruction = (
-                        "\n7. The context may include a [Resume Rankings] block with CV evaluation scores. "
+                        "\nThe context may include a [Resume Rankings] block with CV evaluation scores. "
                         "Use those scores to rank, compare, or recommend candidates when asked.\n"
                     ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
                     qa_prompt += resume_rank_instruction
@@ -768,46 +997,48 @@ class ChatService:
             if is_finance_query or dominant_agent == "finance_agent":
                 qa_prompt = (
                     "You are a Finance Agent for Visibility Docs AI.\n\n"
-                    "Answer only from the provided context and structured summary.\n\n"
-                    "Rules:\n"
-                    "1. Be exact about amounts, dates, and names.\n"
-                    "2. Keep currency symbols and percentages intact.\n"
-                    "3. If the answer is missing, say you cannot find it in the documents.\n"
-                    "4. Do not hallucinate or infer unsupported numbers.\n"
-                    "5. Do not output JSON.\n"
+                    "Answer only from the provided context and structured summary. "
+                    "Be exact about amounts, dates, and names. "
+                    "Keep currency symbols and percentages intact. "
+                    "If the answer is missing, say so. "
+                    "Do not invent numbers.\n"
                 )
             else:
                 resume_rank_instruction = (
-                    "\n7. The context may include a [Resume Rankings] block with CV evaluation scores. "
+                    "\nThe context may include a [Resume Rankings] block with CV evaluation scores. "
                     "Use those scores to rank, compare, or recommend candidates when asked.\n"
                 ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
                 qa_prompt = (
                     f"You are the {agent_label} - a document Q&A assistant for Visibility Docs AI.\n\n"
-                    "Your job is to answer the user's question based ONLY on the provided document context below.\n\n"
-                    "Rules:\n"
-                    "1. Answer in detail using the context — include relevant skills, experience, qualifications, and supporting evidence.\n"
-                    "2. If the context contains image/vision descriptions, use them to answer.\n"
-                    "3. If the answer is NOT in the context, say \"I cannot find this information in the documents.\"\n"
-                    "4. Do NOT make up or hallucinate information.\n"
-                    "5. Do NOT output JSON or extract fields - just answer the question.\n"
-                    "6. If the context has tables or diagrams, explain what they show.\n"
+                    "Answer naturally in the same language as the user's question. "
+                    "Base your reply on the provided context — include relevant details, "
+                    "evidence, and supporting information. If the context contains image "
+                    "descriptions, use them. If the answer is not in the context, say so. "
+                    "If there are tables or diagrams, explain what they show. "
+                    "Do not make up information.\n"
                     f"{resume_rank_instruction}"
                 )
         # ── Common instructions: source citation + counter questions ──
         qa_prompt += (
-            "\n9. When you provide extracted values or information, ALWAYS mention "
-            "which document they came from using the document name shown in brackets "
-            "[Document: ...] in the context.\n"
-            "   Example: 'Invoice-001: 0300-1234567, Resume-John: 042-1112233'\n"
-            "   Never just list values without saying which file they belong to."
+            "\nWhen you share extracted values or information, always mention which "
+            "document it came from — use the document name shown in the context naturally, "
+            "like \"Invoice-001 shows...\" or \"the resume of John contains...\". "
+            "Do not list values without saying which file they belong to."
         )
-        # Only add counter-questions when the user's query is ambiguous/unclear.
-        if self._is_ambiguous(question):
-            qa_prompt += (
-                "\n10. The user's question is vague or ambiguous. At the end of your "
-                "answer, suggest 2-3 relevant counter-questions that would help clarify "
-                "what they want.  Make them specific to the documents discussed."
-            )
+        # ── Clarifying counter-questions (ChatGPT-style) ──
+        # Ask a natural follow-up whenever something is genuinely unclear: the
+        # request is ambiguous/underspecified, OR the context does not contain
+        # enough to answer confidently. The model self-gates this — it must NOT
+        # add questions when it can already answer. Phrasing must be conversational
+        # (no "Counter-questions:" headings, no bulleted lists).
+        qa_prompt += (
+            "\nIf the user's request is ambiguous, missing important details, or the "
+            "provided context does not contain enough information to answer confidently, "
+            "end your reply by naturally asking 1-2 short clarifying follow-up questions "
+            "as a normal conversational sentence (no heading, no \"Counter-questions:\" "
+            "label, no bullet-list formatting). If you can already answer the question "
+            "confidently from the context, do NOT add any questions."
+        )
 
         chat_log.info(f"Built Q&A prompt for agent: {dominant_agent} ({len(qa_prompt)} chars)")
 
@@ -829,6 +1060,48 @@ class ChatService:
             "answer": answer,
             "sources": sources[:5],
             "document_id": sources[0]["document_id"] if sources else "",
+            "history": history,
+            "session_id": sid,
+        }
+
+    def _answer_on_excerpt(self, question: str, selected_text: str, organization_id: str,
+                           sid: str, is_first: bool) -> dict:
+        """Answer a follow-up question grounded STRICTLY on a user-selected excerpt.
+
+        Used for the ChatGPT-style "highlight a response → ask about it" flow. No
+        document retrieval is performed; the model may only use the excerpt.
+        """
+        chat_log = get_chat_logger()
+        excerpt_context = (
+            "The following is an excerpt the user selected from a previous answer. "
+            "Answer the user's question using ONLY this excerpt.\n\n"
+            f"[Selected Excerpt]\n{selected_text}\n[/Selected Excerpt]"
+        )
+        system_prompt = (
+            "You are a helpful assistant for Visibility Docs AI.\n\n"
+            "The user selected a specific portion of a previous response and is asking a "
+            "follow-up question about it. Answer the question using ONLY the provided "
+            "[Selected Excerpt]. Do not use any outside knowledge or other documents.\n\n"
+            "Base every claim on the excerpt — quote or reference the relevant part when useful. "
+            "If the excerpt does not contain the information needed, say so naturally and "
+            "ask one short clarifying question about what they would like to know instead. "
+            "Keep the answer concise. Reply in the same language as the user's question. "
+            "Do not invent facts.\n"
+        )
+        chat_log.info(f"Focused excerpt Q&A — excerpt {len(selected_text)} chars, question {len(question)} chars")
+        chat_log.llm_call("llama-3.3-70b-versatile", len(excerpt_context), len(question), 0)
+        llm_t0 = time.time()
+        answer = conversation_service.chat(
+            question, excerpt_context, session_id=sid,
+            is_followup=not is_first, system_prompt=system_prompt,
+        )
+        chat_log.llm_response(time.time() - llm_t0, len(answer))
+        self._save_exchange(sid, question, answer, [], is_first)
+        history = conversation_service.get_history(sid)
+        return {
+            "answer": answer,
+            "sources": [],
+            "document_id": "",
             "history": history,
             "session_id": sid,
         }

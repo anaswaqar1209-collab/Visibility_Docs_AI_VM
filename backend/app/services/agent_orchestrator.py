@@ -63,6 +63,7 @@ HEURISTIC_RULES = [
             "invoice #", "inv-", "tax invoice", "bill to", "ship to",
             "payment terms", "net 30", "unit price", "quantity", "line items",
             "gst", "grand total",
+            "رسید", "بل", "ٹیکس", "رقم", "واجب الادا", "تاریخ", "انوائس",
         ],
     ),
     (
@@ -73,6 +74,7 @@ HEURISTIC_RULES = [
             "cash flow", "assets", "liabilities", "equity", "revenue",
             "expenses", "net profit", "gross margin", "operating income",
             "financial summary", "financial statement",
+            "مالی گوشوارہ", "آمدنی", "اخراجات", "منافع",
         ],
     ),
     (
@@ -82,6 +84,7 @@ HEURISTIC_RULES = [
             "purchase order", "po number", "po-", "order date", "supplier",
             "vendor", "delivery date", "ship to", "requisition",
             "payment terms", "net 30", "order quantity", "buyer",
+            "آرڈر", "خریداری", "سپلائر", "ونڈر",
         ],
     ),
     (
@@ -90,6 +93,7 @@ HEURISTIC_RULES = [
         [
             "quotation", "quote", "quotation #", "price list", "valid until",
             "offer", "estimate", "proposal", "unit price",
+            "کوٹیشن", "اقتباس", "قیمت", "پیشکش",
         ],
     ),
     (
@@ -100,6 +104,7 @@ HEURISTIC_RULES = [
             "offer letter", "hr policy", "payroll", "designation",
             "department", "training", "manager", "employee id",
             "performance review", "appointment letter",
+            "ملازم", "تنخواہ", "چھٹی", "عہدہ", "شعبہ",
         ],
     ),
     (
@@ -111,6 +116,7 @@ HEURISTIC_RULES = [
             "renewal", "signature", "whereas", "in witness whereof",
             "indemnity", "confidentiality", "lease agreement",
             "service agreement", "binding", "executed",
+            "معاہدہ", "کنٹریکٹ", "دستخط", "شرائط", "قانون",
         ],
     ),
     (
@@ -121,6 +127,7 @@ HEURISTIC_RULES = [
             "education", "skills", "professional summary",
             "employment history", "qualifications", "achievements",
             "certifications", "objective",
+            "سوانح عمری", "تعلیم", "تجربہ", "مہارتیں", "اسناد",
         ],
     ),
     (
@@ -131,6 +138,7 @@ HEURISTIC_RULES = [
             "non-conformance", "corrective action", "finding",
             "critical", "major", "minor", "recommendations",
             "auditor", "scope", "compliance status",
+            "آڈٹ", "جانچ", "مشاہدات", "سفارشات",
         ],
     ),
     (
@@ -140,6 +148,7 @@ HEURISTIC_RULES = [
             "quality report", "quality control", "qc", "quality assurance",
             "qa", "inspection report", "defect", "pass rate", "fail rate",
             "specification", "tolerance", "quality metrics",
+            "کوالٹی", "معیار", "جانچ", "نقص",
         ],
     ),
     (
@@ -150,6 +159,7 @@ HEURISTIC_RULES = [
             "this certifies", "cert no", "certificate of analysis",
             "certificate of origin", "certificate of compliance",
             "iso certificate", "certifying body",
+            "سند", "تصدیق", "سرٹیفکیٹ",
         ],
     ),
     (
@@ -159,6 +169,7 @@ HEURISTIC_RULES = [
             "maintenance", "service report", "repair", "equipment",
             "downtime", "technician", "work order", "breakdown",
             "fault", "servicing", "preventive maintenance",
+            "مرمت", "دیکھ بھال", "سروس", "خرابی",
         ],
     ),
     (
@@ -168,6 +179,7 @@ HEURISTIC_RULES = [
             "standard operating procedure", "sop", "procedure",
             "steps", "instructions", "protocol", "step-by-step",
             "operating procedure", "process guide",
+            "طریقہ کار", "ہدایات", "مراحل", "پروٹوکول",
         ],
     ),
     (
@@ -177,6 +189,7 @@ HEURISTIC_RULES = [
             "drawing", "dwg", "schematic", "dimension", "tolerance",
             "scale", "revision", "title block", "part no",
             "drawn by", "checked by", "blueprint", "datum",
+            "ڈرائنگ", "خاکہ", "پیمائش", "طول و عرض",
         ],
     ),
     (
@@ -187,6 +200,7 @@ HEURISTIC_RULES = [
             "credit hours", "cgpa", "academic record", "marksheet",
             "marks sheet", "result card", "examination", "credits earned",
             "grade point", "student name", "roll number", "registration no",
+            "نمبر", "درجہ", "گریڈ", "امتحان", "مضمون",
         ],
     ),
 ]

@@ -164,7 +164,8 @@ export default function Home() {
             onOpenDoc={(doc: any) => { setGotoDoc(doc); setTab("docs"); }} />
         ) : tab === "docs" ? (
           <AllDocumentsPage showToast={showToast} orgId={orgId} token={token}
-            agentFilter={agentFilter} setAgentFilter={setAgentFilter} gotoDoc={gotoDoc} clearGotoDoc={() => setGotoDoc(null)} />
+            gotoDoc={gotoDoc} clearGotoDoc={() => setGotoDoc(null)}
+            agentFilter={agentFilter} setAgentFilter={setAgentFilter} />
         ) : (
           <ChatSection showToast={showToast} selectedDocs={selectedChatDocs} setSelectedDocs={setSelectedChatDocs}
             orgId={orgId} token={token} agentFilter={agentFilter} />
@@ -187,11 +188,9 @@ export default function Home() {
 function loadSeen(): Set<string> { try { const r = localStorage.getItem("sc"); return new Set(r ? JSON.parse(r) : []); } catch { return new Set(); } }
 function saveSeen(id: string) { try { const r = localStorage.getItem("sc"); const a: string[] = r ? JSON.parse(r) : []; if (!a.includes(id)) { a.push(id); localStorage.setItem("sc", JSON.stringify(a)); } } catch {} }
 
-function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter, gotoDoc, clearGotoDoc }: any) {
+function AllDocumentsPage({ showToast, orgId, token, gotoDoc, clearGotoDoc, agentFilter, setAgentFilter }: any) {
   const [docs, setDocs] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
-  const [search, setSearch] = useState("");
   const [classifyQueue, setClassifyQueue] = useState<any[]>([]);
   const classifyQueueRef = useRef<any[]>([]);
   const seen = useRef<Set<string>>(loadSeen());
@@ -244,8 +243,16 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
 
       prevDocsRef.current = newDocs;
       setDocs(newDocs);
-    } catch { } finally { setLoading(false); }
+    } catch { }
   }
+
+  const handleDeleteDoc = async (doc: any) => {
+    if (!confirm("Delete this document?")) return;
+    await authFetch(token, `${API}/api/v1/documents/${doc.id}?organization_id=${orgId}`, { method: "DELETE" });
+    showToast("Document deleted");
+    if (selected?.id === doc.id) setSelected(null);
+    load();
+  };
 
   const nextInQueue = () => {
     classifyQueueRef.current.shift();
@@ -261,90 +268,19 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
       });
       setDocs(prev => prev.map(d => d.id === docId ? { ...d, document_type: docType, phase3_agent: phase3Agent } : d));
       nextInQueue();
-      showToast(`Agent set to "${phase3Agent.replace(/_/g, " ")}" ✅`);
+      showToast(`Type: ${DOC_TYPE_LABELS[docType] || docType} → ${agentLabel(phase3Agent)} ✅`);
     } catch {
       showToast("Failed to update document settings");
     }
   };
 
-  const getDocAgent = (d: any) =>
-    d.phase3_agent || DOC_TYPE_TO_AGENT[d.document_type] || "other_agent";
-
-  const filtered = docs.filter((d: any) => {
-    if (d.status !== "processed" && d.status !== "failed" && d.status !== "error" && d.status !== "processing") return false;
-    const matchSearch = (d.title || "").toLowerCase().includes(search.toLowerCase());
-    const matchAgent = !agentFilter || getDocAgent(d) === agentFilter;
-    return matchSearch && matchAgent;
-  }).sort((a: any, b: any) => {
-    const aIsResume = a.document_type === "resume";
-    const bIsResume = b.document_type === "resume";
-    if (aIsResume && bIsResume) return (b.cv_score || 0) - (a.cv_score || 0);
-    if (aIsResume) return -1;
-    if (bIsResume) return 1;
-    return 0;
-  });
-
   return (
     <div className="flex-1 flex overflow-hidden">
-      <FolderTree docs={docs} orgId={orgId} token={token} />
-      {/* document list */}
-      <div className="w-[420px] shrink-0 flex flex-col border-r border-slate-200/50 bg-white">
-        <div className="p-4 pb-1.5">
-          <div className="relative">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all"
-              placeholder="Search documents..." />
-          </div>
-        </div>
-        <div className="px-4 pb-3">
-          <div className="relative">
-            <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs appearance-none cursor-pointer outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all text-slate-600">
-              {AGENT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-            <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
-          </div>
-        </div>
-        <UploadBox onUpload={() => { load(); showToast("Document uploaded successfully ✨"); }} />
-        <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-2">
-          {loading && [...Array(4)].map((_, i) => (
-            <div key={i} className="h-20 rounded-xl bg-slate-100 animate-pulse" />
-          ))}
-          {!loading && filtered.length === 0 && (
-            <div className="text-center py-12 text-slate-400">
-              <p className="text-3xl mb-2">📄</p>
-              <p className="text-sm font-medium">No documents yet</p>
-              <p className="text-xs mt-1">Upload your first document above</p>
-            </div>
-          )}
-          {filtered.map((doc: any) => (
-            <button key={doc.id} onClick={() => setSelected(doc)}
-              className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 card-hover
-                ${selected?.id === doc.id ? "border-indigo-300 bg-indigo-50/50 shadow-md shadow-indigo-200/20" : "border-slate-200 bg-white hover:border-slate-300"}`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-sm text-slate-800 truncate">{doc.title || "Untitled"}</p>
-                  <div className="flex gap-1.5 mt-1.5 flex-wrap">
-                    <span className={`badge badge-sm ${typeColor(doc.document_type)}`}>{doc.document_type || "unknown"}</span>
-                    <span className={`badge badge-sm ${statusColor(doc.status)}`}>{doc.status === "processing" ? <><span className="loading loading-spinner loading-xs mr-1" />Processing</> : doc.status}</span>
-                    {doc.document_type === "resume" && doc.cv_score != null && (
-                      <span className={`badge badge-sm ${doc.cv_score >= 70 ? "badge-success" : doc.cv_score >= 40 ? "badge-warning" : "badge-error"}`}>
-                        Score: {doc.cv_score}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-1.5">{timeAgo(doc.created_at)}</p>
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
+      <FolderTree docs={docs} orgId={orgId} token={token}
+        onSelectDoc={(d: any) => setSelected(d)} selectedDocId={selected?.id}
+        onDeleteDoc={handleDeleteDoc}
+        onUpload={() => { load(); showToast("Document uploaded successfully ✨"); }}
+        agentFilter={agentFilter} onAgentFilter={setAgentFilter} />
 
       {/* detail panel */}
       <div className="flex-1 overflow-y-auto bg-gradient-surface p-6">
@@ -352,7 +288,7 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
           <div className="h-full flex items-center justify-center text-slate-300">
             <div className="text-center">
               <p className="text-5xl mb-4">📋</p>
-              <p className="text-lg font-medium">Select a document to view details</p>
+              <p className="text-lg font-medium">Select a document from the folder to view details</p>
             </div>
           </div>
         )}
@@ -376,7 +312,7 @@ function AllDocumentsPage({ showToast, orgId, token, agentFilter, setAgentFilter
    FOLDER TREE PANEL (agent → type → files)
    Embedded in the Documents page, left of the doc list.
    ════════════════════════════════════════ */
-function FolderTree({ docs, orgId, token }: any) {
+function FolderTree({ docs, orgId, token, onSelectDoc, selectedDocId, onDeleteDoc, onUpload, agentFilter, onAgentFilter }: any) {
   const [search, setSearch] = useState("");
 
   const getDocAgent = (d: any) => d.phase3_agent || DOC_TYPE_TO_AGENT[d.document_type] || "other_agent";
@@ -386,6 +322,7 @@ function FolderTree({ docs, orgId, token }: any) {
   for (const d of docs) {
     if (q && !((d.title || "").toLowerCase().includes(q))) continue;
     const agent = getDocAgent(d);
+    if (agentFilter && agent !== agentFilter) continue;
     const type = d.document_type || "unclassified";
     (tree[agent] ||= {})[type] ||= [];
     tree[agent][type].push(d);
@@ -395,9 +332,9 @@ function FolderTree({ docs, orgId, token }: any) {
   const visibleAgents = agentOrder.filter(a => tree[a] && Object.keys(tree[a]).length > 0);
 
   return (
-    <div className="w-[260px] shrink-0 flex flex-col border-r border-slate-200/50 bg-white">
-      <div className="p-3 border-b border-slate-200/50">
-        <p className="text-sm font-bold text-slate-800 mb-2">📁 Folders</p>
+    <div className="w-[320px] shrink-0 flex flex-col border-r border-slate-200/50 bg-white">
+      <div className="p-3 border-b border-slate-200/50 space-y-2">
+        <p className="text-sm font-bold text-slate-800">📁 Folders</p>
         <div className="relative">
           <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -406,6 +343,16 @@ function FolderTree({ docs, orgId, token }: any) {
             className="w-full pl-8 pr-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all"
             placeholder="Search files..." />
         </div>
+        <div className="relative">
+          <select value={agentFilter || ""} onChange={e => onAgentFilter?.(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs appearance-none cursor-pointer outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all text-slate-600">
+            {AGENT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+        <UploadBox onUpload={onUpload} />
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
         {visibleAgents.length === 0 && (
@@ -436,18 +383,23 @@ function FolderTree({ docs, orgId, token }: any) {
                         .slice()
                         .sort((a: any, b: any) => (a.title || "").localeCompare(b.title || ""))
                         .map((d: any) => (
-                          <a key={d.id}
-                            href={`${API}/api/v1/documents/${d.id}/file?organization_id=${orgId}`}
-                            target="_blank"
-                            className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md hover:bg-white border border-transparent hover:border-slate-200 transition-all group">
-                            <span className="flex items-center gap-1.5 min-w-0">
-                              <span className="text-slate-400 group-hover:text-indigo-500 text-xs">📄</span>
-                              <span className="text-xs text-slate-700 truncate">{d.title || d.original_file_url || "Untitled"}</span>
-                            </span>
-                            <span className="flex items-center gap-1 shrink-0">
-                              <span className={`badge badge-xs ${statusColor(d.status)}`}>{d.status}</span>
-                            </span>
-                          </a>
+                          <div key={d.id} className="flex items-center gap-1 group">
+                            <button onClick={() => onSelectDoc?.(d)}
+                              className={`flex-1 flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md hover:bg-white border transition-all ${selectedDocId === d.id ? "border-indigo-300 bg-indigo-50/70" : "border-transparent hover:border-slate-200"}`}>
+                              <span className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-slate-400 group-hover:text-indigo-500 text-xs">📄</span>
+                                <span className="text-xs text-slate-700 truncate">{d.title || d.original_file_url || "Untitled"}</span>
+                              </span>
+                              <span className="flex items-center gap-1 shrink-0">
+                                <span className={`badge badge-xs ${statusColor(d.status)}`}>{d.status}</span>
+                              </span>
+                            </button>
+                            <button onClick={() => onDeleteDoc?.(d)} className="p-1.5 rounded-md text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100" title="Delete document">
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
                         ))}
                     </div>
                   </details>
@@ -615,9 +567,9 @@ function agentLabel(a: string) {
 
 /* ─────── Classification Popup ─────── */
 function ClassifyPopup({ doc, queueLen = 1, onConfirm, onDismiss }: any) {
-  const defaultAgent = DOC_TYPE_TO_AGENT[doc.document_type] || "other_agent";
-  const [agent, setAgent] = useState(defaultAgent);
-  const types = ["finance_agent", "procurement_agent", "hr_agent", "legal_agent", "compliance_agent", "other_agent"];
+  const docTypeOptions = DOC_TYPE_OPTIONS.filter(o => o.value);
+  const [docType, setDocType] = useState(doc.document_type || "other");
+  const agent = DOC_TYPE_TO_AGENT[docType] || "other_agent";
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm fade-in" onClick={onDismiss}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 mx-4 border border-slate-200 slide-up" onClick={e => e.stopPropagation()}>
@@ -638,18 +590,12 @@ function ClassifyPopup({ doc, queueLen = 1, onConfirm, onDismiss }: any) {
           </div>
         </div>
 
-        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-4 mb-4 border border-indigo-100">
-          <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-1">Detected Type</p>
-          <p className="text-lg font-bold text-slate-800">{doc.document_type || "unknown"}</p>
-          <p className="text-xs text-slate-500 mt-1">Agent: {agentLabel(defaultAgent)}</p>
-        </div>
-
         <div className="mb-4">
-          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">Change Extraction Agent</label>
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">Document Type</label>
           <div className="relative">
-            <select value={agent} onChange={e => setAgent(e.target.value)}
+            <select value={docType} onChange={e => setDocType(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm appearance-none cursor-pointer outline-none focus:ring-2 focus:ring-indigo-400/30 focus:border-indigo-400 transition-all">
-              {types.map(t => <option key={t} value={t}>{agentLabel(t)}</option>)}
+              {docTypeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
             <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -657,12 +603,17 @@ function ClassifyPopup({ doc, queueLen = 1, onConfirm, onDismiss }: any) {
           </div>
         </div>
 
+        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-4 mb-4 border border-indigo-100">
+          <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-1">Folder / Agent</p>
+          <p className="text-lg font-bold text-slate-800">{agentLabel(agent)}</p>
+        </div>
+
         <div className="flex gap-3">
           <button onClick={() => onDismiss()}
             className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-all">
             Dismiss
           </button>
-          <button onClick={() => onConfirm(doc.id, doc.document_type, agent)}
+          <button onClick={() => onConfirm(doc.id, docType, agent)}
             className="flex-1 px-4 py-2.5 rounded-xl bg-indigo-600 text-sm font-semibold text-white hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200">
             Save
           </button>
@@ -778,6 +729,7 @@ function DocDetail({ doc, showToast, onDelete }: any) {
   const [images, setImages] = useState<any[]>([]);
   const [descFileUrl, setDescFileUrl] = useState("");
   const [cvData, setCvData] = useState<any>(null);
+  const [reclassifying, setReclassifying] = useState(false);
 
   useEffect(() => {
     authFetch(token, `${API}/api/v1/search/similar/${doc.id}?organization_id=${orgId}`)
@@ -795,6 +747,24 @@ function DocDetail({ doc, showToast, onDelete }: any) {
     await authFetch(token, `${API}/api/v1/documents/${doc.id}?organization_id=${orgId}`, { method: "DELETE" });
     showToast("Document deleted");
     onDelete?.();
+  };
+
+  const reclassify = async () => {
+    setReclassifying(true);
+    try {
+      const r = await authFetch(token, `${API}/api/v1/documents/${doc.id}/classify?organization_id=${orgId}`, { method: "POST" });
+      if (r.ok) {
+        showToast("Reclassification complete ✅");
+        onDelete?.();
+      } else {
+        const err = await r.json().catch(() => ({}));
+        showToast(`❌ ${err.detail || "Reclassification failed"}`);
+      }
+    } catch {
+      showToast("❌ Network error during reclassification");
+    } finally {
+      setReclassifying(false);
+    }
   };
 
   return (
@@ -828,15 +798,25 @@ function DocDetail({ doc, showToast, onDelete }: any) {
         ))}
       </div>
 
-      {doc.original_file_url && (
-        <a href={`${API}/api/v1/documents/${doc.id}/file?organization_id=${orgId}`} target="_blank"
-          className="btn btn-outline btn-sm mb-6 border-slate-300 text-slate-600 hover:bg-slate-100">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-          Open File
-        </a>
-      )}
+      <div className="flex gap-2 mb-6">
+        {doc.original_file_url && (
+          <a href={`${API}/api/v1/documents/${doc.id}/file?organization_id=${orgId}`} target="_blank"
+            className="btn btn-outline btn-sm border-slate-300 text-slate-600 hover:bg-slate-100">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Open File
+          </a>
+        )}
+        <button onClick={reclassify} disabled={reclassifying}
+          className="btn btn-ghost btn-sm text-indigo-500 hover:bg-indigo-50">
+          {reclassifying ? <><span className="loading loading-spinner loading-xs mr-1" /> Reclassifying...</> : (
+            <><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg> Reclassify with AI</>
+          )}
+        </button>
+      </div>
 
       {doc.raw_text && (
         <details className="bg-white rounded-xl border border-slate-200 mb-6 overflow-hidden">
@@ -974,6 +954,56 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const msgsContainerRef = useRef<HTMLDivElement>(null);
+
+  /* ── "ask about this" (select a response excerpt → follow-up) ── */
+  const [focusedExcerpt, setFocusedExcerpt] = useState("");
+  const [selPopover, setSelPopover] = useState<{ text: string; x: number; y: number } | null>(null);
+
+  const isInsideAssistant = (node: Node | null): boolean => {
+    while (node) {
+      if ((node as HTMLElement).dataset?.role === "assistant") return true;
+      node = node.parentNode;
+    }
+    return false;
+  };
+
+  const handleSelection = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) { setSelPopover(null); return; }
+    const text = sel.toString().trim();
+    if (!text) { setSelPopover(null); return; }
+    // Allow selection only when BOTH ends are inside an assistant message
+    // (handles right-to-left backward selections)
+    if (!isInsideAssistant(sel.anchorNode) || !isInsideAssistant(sel.focusNode)) {
+      setSelPopover(null);
+      return;
+    }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    setSelPopover({ text, x: rect.left + rect.width / 2, y: rect.top - 8 });
+  };
+
+  const startExcerptQuestion = () => {
+    if (!selPopover) return;
+    setFocusedExcerpt(selPopover.text);
+    setSelPopover(null);
+    window.getSelection()?.removeAllRanges();
+    inputRef.current?.focus();
+  };
+
+  // Dismiss the popover when scrolling or clicking outside the messages area
+  useEffect(() => {
+    if (!selPopover) return;
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (t && (t as HTMLElement).closest && (t as HTMLElement).closest("[data-popover-btn]")) return;
+      if (msgsContainerRef.current && !msgsContainerRef.current.contains(t)) {
+        setSelPopover(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [selPopover]);
 
   /* ── left panel state ── */
   const [searchQuery, setSearchQuery] = useState("");
@@ -1001,7 +1031,6 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
     d.phase3_agent || DOC_TYPE_TO_AGENT[d.document_type] || "other_agent";
 
   const filteredDocs = allDocs.filter((d: any) => {
-    if (d.status !== "processed" && d.status !== "failed" && d.status !== "error" && d.status !== "processing") return false;
     const matchSearch = !searchQuery || (d.title || "").toLowerCase().includes(searchQuery.toLowerCase());
     const matchAgent = !agentFilter || getDocAgent(d) === agentFilter;
     return matchSearch && matchAgent;
@@ -1092,6 +1121,7 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
       const docIds = selectedDocs.map((d: any) => d.id);
       const body: any = { question: q, organization_id: orgId, document_ids: docIds, phase3_agent: agentFilter || undefined };
       if (activeSessionId) body.session_id = activeSessionId;
+      if (focusedExcerpt) body.selected_text = focusedExcerpt;
 
       const r = await authFetch(token, `${API}/api/v1/chat`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -1102,6 +1132,7 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
       setMessages(prev => [...prev, { role: "assistant", content: data.answer }]);
       if (data.session_id) setActiveSessionId(data.session_id);
       if (data.sources) setSources(data.sources);
+      setFocusedExcerpt("");
 
       sessionsRefresh();
     } catch { setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Connection error. Please check the backend." }]); }
@@ -1253,7 +1284,7 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
         )}
 
         {/* messages */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+        <div ref={msgsContainerRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-4" onMouseUp={handleSelection} onScroll={() => setSelPopover(null)}>
           {messages.length === 0 && !loading && (
             <div className="h-full flex items-center justify-center">
               <div className="text-center max-w-md">
@@ -1284,7 +1315,7 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
                         <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
                       </svg>
                     </div>
-                    <div className="px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200/60 shadow-sm">
+                    <div className="px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200/60 shadow-sm" data-role="assistant">
                       <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">{m.content}</p>
                     </div>
                   </div>
@@ -1358,6 +1389,39 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
               </div>
             </details>
           </div>
+        )}
+
+        {/* focused excerpt chip ("ask about this") */}
+        {focusedExcerpt && (
+          <div className="shrink-0 px-5 pt-2">
+            <div className="flex items-start gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200">
+              <svg className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+              </svg>
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] font-semibold text-amber-600 uppercase tracking-wider mb-0.5">Asking about this selection</div>
+                <div className="text-xs text-amber-800 line-clamp-2 italic">“{focusedExcerpt}”</div>
+              </div>
+              <button onClick={() => setFocusedExcerpt("")} className="shrink-0 text-amber-500 hover:text-red-500 transition-colors">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* selection popover for "ask about this" */}
+        {selPopover && (
+          <button data-popover-btn
+            onClick={startExcerptQuestion}
+            style={{ position: "fixed", left: selPopover.x, top: selPopover.y, transform: "translate(-50%, -100%)" }}
+            className="z-50 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium shadow-lg hover:bg-slate-800 transition-colors flex items-center gap-1.5">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+            </svg>
+            Ask about this
+          </button>
         )}
 
         {/* input */}
