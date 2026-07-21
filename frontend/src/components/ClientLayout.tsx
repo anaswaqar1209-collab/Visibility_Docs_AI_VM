@@ -17,6 +17,7 @@ const PAGE_TITLES: Record<string, string> = {
     "/admin/departments": "Departments",
     "/admin/admins": "Admins",
     "/admin/documents": "All Documents",
+    "/admin/settings": "AI Settings",
 };
 
 function resolvePageTitle(pathname: string | null): string {
@@ -55,7 +56,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 
     useEffect(() => {
         if (ready && role === "superAdmin" && pathname) {
-            const allowedRoutes = ["/admin/documents", "/chat", "/activity", "/admin/admins"];
+            const allowedRoutes = ["/admin/documents", "/chat", "/activity", "/admin/admins", "/admin/settings"];
             const isAllowed = allowedRoutes.some(
                 (route) => pathname === route || pathname.startsWith(`${route}/`)
             );

@@ -3,10 +3,11 @@
 import React, { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { FileText, Loader2, RefreshCw, Search, Filter, X, Info, Eye, Trash2 } from "lucide-react";
+import { FileText, Loader2, RefreshCw, Search, Filter, X, Info, Eye, Trash2, Share2 } from "lucide-react";
 import ClientLayout from "@/components/ClientLayout";
 import FilterSelect from "@/components/FilterSelect";
 import LibraryPagination from "@/components/LibraryPagination";
+import ShareModal from "@/components/ShareModal";
 import { PageHeader, EmptyState, Badge, Button } from "@/components/ui";
 import { useTheme } from "@/context/ColorContext";
 import { usePermissions } from "@/context/PermissionsContext";
@@ -138,7 +139,7 @@ function DepartmentOverviewContent() {
     const [page, setPage] = useState(1);
     const [pageLimit, setPageLimit] = useState(10);
     const [filtersOpen, setFiltersOpen] = useState(false);
-    const [sharingId, setSharingId] = useState<string | null>(null);
+    const [sharingDoc, setSharingDoc] = useState<{ documentId: string; filename: string } | null>(null);
 
     const activeSort = SORT_PRESETS.find((s) => s.value === sortPreset) || SORT_PRESETS[0];
     const hasActiveFilters = Boolean(scoreFilter || agentFilter || scopeFilter || typeFilter || sortPreset !== "newest");
@@ -226,35 +227,6 @@ function DepartmentOverviewContent() {
             await loadDocs();
         } catch (e: any) {
             setError(e.message || "Delete failed");
-        }
-    };
-
-    const shareToDepartment = async (documentId: string) => {
-        setSharingId(documentId);
-        try {
-            await apiRequest(`/docs/documents/${documentId}/share`, {
-                method: "POST",
-                body: JSON.stringify({ scope: "department", departmentId }),
-            });
-            await loadDocs();
-        } catch (e: any) {
-            setError(e.message || "Share failed");
-        } finally {
-            setSharingId(null);
-        }
-    };
-
-    const unshareFromDepartment = async (documentId: string) => {
-        setSharingId(documentId);
-        try {
-            await apiRequest(`/docs/documents/${documentId}/share`, {
-                method: "DELETE",
-            });
-            await loadDocs();
-        } catch (e: any) {
-            setError(e.message || "Unshare failed");
-        } finally {
-            setSharingId(null);
         }
     };
 
@@ -560,28 +532,14 @@ function DepartmentOverviewContent() {
                                                 <Trash2 size={14} /> Delete
                                             </button>
                                         )}
-                                        {doc.sharedToDepartment ? (
-                                            (canShareDocs() || me?.orgRole?.isLeader) && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => unshareFromDepartment(doc.documentId)}
-                                                    disabled={sharingId === doc.documentId}
-                                                    className="btn-outline rounded-lg px-3 py-2 text-sm flex items-center justify-center gap-1.5 min-h-10"
-                                                >
-                                                    Hide from dept
-                                                </button>
-                                            )
-                                        ) : (
-                                            (canShareDocs() || me?.orgRole?.isLeader) && doc.visibilityScope !== "department" && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => shareToDepartment(doc.documentId)}
-                                                    disabled={sharingId === doc.documentId}
-                                                    className="btn-secondary rounded-lg px-3 py-2 text-sm flex items-center justify-center gap-1.5 min-h-10"
-                                                >
-                                                    Share to dept
-                                                </button>
-                                            )
+                                        {(canShareDocs() || me?.orgRole?.isLeader) && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setSharingDoc({ documentId: doc.documentId, filename: doc.originalFilename })}
+                                                className="btn-secondary rounded-lg px-3 py-2 text-sm flex items-center justify-center gap-1.5 min-h-10"
+                                            >
+                                                <Share2 size={14} /> Share
+                                            </button>
                                         )}
                                     </div>
                                 </li>
@@ -601,6 +559,18 @@ function DepartmentOverviewContent() {
                     textMutedClass={colors.textMuted}
                 />
             </div>
+
+            {/* Share Modal */}
+            {sharingDoc && (
+                <ShareModal
+                    documentId={sharingDoc.documentId}
+                    filename={sharingDoc.filename}
+                    currentDepartmentId={departmentId}
+                    open={true}
+                    onClose={() => setSharingDoc(null)}
+                    onShared={() => { loadDocs(); loadOverview(); }}
+                />
+            )}
         </div>
     );
 }

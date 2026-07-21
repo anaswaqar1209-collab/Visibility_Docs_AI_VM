@@ -1,0 +1,176 @@
+"""
+Provider Manager - Manages multiple AI provider keys and routes requests.
+
+Providers supported: groq, openai, gemini, anthropic, custom
+Each provider has its own API key, model, and base URL.
+The manager handles fallback logic when a provider fails.
+"""
+
+import os
+import json
+import logging
+from typing import Optional, Dict, Any, List
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+STATE_DIR = Path(__file__).parent.parent.parent / "data"
+PROVIDERS_STATE_FILE = STATE_DIR / "providers_config.json"
+
+
+class ProviderConfig:
+    """Configuration for a single AI provider."""
+    def __init__(self, provider: str, api_key: str, model: str = "", base_url: str = "", label: str = ""):
+        self.provider = provider
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url
+        self.label = label or provider.title()
+
+    def to_dict(self) -> dict:
+        return {
+            "provider": self.provider,
+            "api_key": self.api_key,
+            "model": self.model,
+            "base_url": self.base_url,
+            "label": self.label,
+        }
+
+
+class ProviderManager:
+    """
+    Manages AI provider configurations with fallback support.
+
+    Priority order: groq > openai > gemini > anthropic > custom
+    When a provider hits rate limit, the next available provider is used.
+    """
+
+    PROVIDER_PRIORITY = ["groq", "openai", "gemini", "anthropic", "custom"]
+
+    def __init__(self):
+        self._providers: Dict[str, ProviderConfig] = {}
+        self._load_from_state()
+        self._load_from_env()
+
+    def _load_from_state(self):
+        """Load provider configs from persistent state file."""
+        try:
+            if PROVIDERS_STATE_FILE.exists():
+                with open(PROVIDERS_STATE_FILE, "r") as f:
+                    data = json.load(f)
+                for p in data.get("providers", []):
+                    if p.get("api_key"):
+                        self._providers[p["provider"]] = ProviderConfig(**p)
+                logger.info(f"Loaded {len(self._providers)} providers from state file")
+        except Exception as e:
+            logger.warning(f"Failed to load providers state: {e}")
+
+    def _load_from_env(self):
+        """Load provider configs from environment variables (fallback)."""
+        env_map = {
+            "groq": ("GROQ_API_KEY", "GROQ_MODEL", "GROQ_BASE_URL"),
+            "openai": ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"),
+            "gemini": ("GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_BASE_URL"),
+            "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL"),
+        }
+        for provider, (key_env, model_env, url_env) in env_map.items():
+            if provider not in self._providers:
+                api_key = os.getenv(key_env, "")
+                if api_key:
+                    self._providers[provider] = ProviderConfig(
+                        provider=provider,
+                        api_key=api_key,
+                        model=os.getenv(model_env, ""),
+                        base_url=os.getenv(url_env, ""),
+                    )
+
+    def _save_state(self):
+        """Persist provider configs to disk."""
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            data = {
+                "providers": [p.to_dict() for p in self._providers.values()]
+            }
+            with open(PROVIDERS_STATE_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save providers state: {e}")
+
+    def set_provider(self, provider: str, api_key: str, model: str = "", base_url: str = ""):
+        """Add or update a provider configuration."""
+        self._providers[provider] = ProviderConfig(
+            provider=provider, api_key=api_key, model=model, base_url=base_url
+        )
+        self._save_state()
+        # Also update environment variables for compatibility
+        env_key_map = {
+            "groq": "GROQ_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+        }
+        if provider in env_key_map:
+            os.environ[env_key_map[provider]] = api_key
+        logger.info(f"Provider {provider} configured with model={model}")
+
+    def remove_provider(self, provider: str):
+        """Remove a provider configuration."""
+        self._providers.pop(provider, None)
+        self._save_state()
+
+    def get_provider(self, provider: str) -> Optional[ProviderConfig]:
+        """Get a specific provider config."""
+        return self._providers.get(provider)
+
+    def get_active_providers(self) -> List[ProviderConfig]:
+        """Get all configured providers in priority order."""
+        result = []
+        for p in self.PROVIDER_PRIORITY:
+            if p in self._providers and self._providers[p].api_key:
+                result.append(self._providers[p])
+        return result
+
+    def get_primary_provider(self) -> Optional[ProviderConfig]:
+        """Get the primary (first available) provider."""
+        active = self.get_active_providers()
+        return active[0] if active else None
+
+    def get_fallback_provider(self, failed_provider: str) -> Optional[ProviderConfig]:
+        """
+        Get the next available provider after the failed one.
+        Used for automatic fallback when a provider hits rate limits.
+        """
+        active = self.get_active_providers()
+        for i, p in enumerate(active):
+            if p.provider == failed_provider:
+                if i + 1 < len(active):
+                    return active[i + 1]
+                # Wrap around to the first provider (if multiple providers)
+                if len(active) > 1:
+                    return active[0]
+        return None
+
+    def get_groq_key(self) -> str:
+        """Get Groq API key (for backward compatibility)."""
+        p = self._providers.get("groq")
+        return p.api_key if p else os.getenv("GROQ_API_KEY", "")
+
+    def get_config_summary(self) -> dict:
+        """Get a summary of all configured providers."""
+        return {
+            "providers": [
+                {
+                    "provider": p.provider,
+                    "label": p.label,
+                    "model": p.model,
+                    "hasKey": bool(p.api_key),
+                    "isPrimary": p == self.get_primary_provider(),
+                }
+                for p in self._providers.values()
+            ],
+            "primary": self.get_primary_provider().provider if self.get_primary_provider() else None,
+        }
+
+
+# Module-level singleton
+provider_manager = ProviderManager()

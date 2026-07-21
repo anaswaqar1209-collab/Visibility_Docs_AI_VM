@@ -531,10 +531,29 @@ export const deleteOrgRole = async (req: Request, res: Response, next: NextFunct
 
 // ── Document shares ──────────────────────────────────────────
 
+/**
+ * Share a document.
+ *
+ * Body:
+ *   scope: 'user' | 'department' | 'all'
+ *   targetUserIds?: string[]      – required when scope='user'
+ *   departmentId?: string         – required when scope='department' (cross-department)
+ *   visibility?: 'leader_only' | 'all_members'  – default 'all_members'
+ *
+ * Behaviour:
+ *   - scope='user'         → shares with specific users (employee → own dept peers)
+ *   - scope='department'   → shares with a department
+ *       • same dept        → visibility defaults to 'all_members'
+ *       • cross dept       → visibility defaults to 'leader_only' (only that dept's leader)
+ *   - scope='all'          → shares with everyone in the org
+ *
+ * Each call is additive: previous shares are NOT removed.
+ * A new share with the same (document, scope, departmentId) replaces the old one.
+ */
 export const shareDocument = async (req: Request, res: Response, next: NextFunction) => {
     try {
+        // Permission check: must have document.share OR be a leader
         if (!hasPermission(req.user, PERMISSIONS.DOCUMENT_SHARE) && req.user.role === 'team') {
-            // Leaders get share via role; also allow if isLeader
             const ctx = await loadUserDeptContext(req.user);
             if (!ctx.isLeader) {
                 return res.status(403).json({ success: false, message: 'Forbidden' });
@@ -543,6 +562,8 @@ export const shareDocument = async (req: Request, res: Response, next: NextFunct
 
         const doc = await Document.findOne({ documentId: req.params.id });
         if (!doc) return res.status(404).json({ success: false, message: 'Document not found' });
+
+        // Only the uploader, admin, or superAdmin can share
         if (doc.uploadedBy !== req.user.userId && req.user.role !== 'admin' && req.user.role !== 'superAdmin') {
             return res.status(403).json({ success: false, message: 'Only the uploader can share this document' });
         }
@@ -550,41 +571,160 @@ export const shareDocument = async (req: Request, res: Response, next: NextFunct
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
 
-        const { scope, targetUserIds, departmentId } = req.body || {};
-        if (scope !== 'user' && scope !== 'department') {
-            return res.status(400).json({ success: false, message: 'scope must be user or department' });
+        const { scope, targetUserIds, departmentId, visibility } = req.body || {};
+        if (scope !== 'user' && scope !== 'department' && scope !== 'all') {
+            return res.status(400).json({ success: false, message: 'scope must be user, department, or all' });
         }
 
-        await DocumentShare.deleteMany({ documentId: doc.documentId, sharedBy: req.user.userId });
+        const orgId = doc.organizationId || req.user.organizationId || '';
 
-        const share = await DocumentShare.create({
-            shareId: `share_${uuidv4()}`,
-            documentId: doc.documentId,
-            sharedBy: req.user.userId,
-            organizationId: doc.organizationId || req.user.organizationId || '',
-            scope,
-            targetUserIds: scope === 'user' ? (Array.isArray(targetUserIds) ? targetUserIds : []) : [],
-            departmentId:
-                scope === 'department'
-                    ? departmentId || doc.departmentId || null
-                    : null,
-        });
+        // Load current user's dept context to determine same vs cross dept
+        const myCtx = await loadUserDeptContext(req.user);
 
-        recordActivityFromReq(req, {
-            action: 'document.share',
-            category: 'document',
-            resourceType: 'document',
-            resourceId: doc.documentId,
-            message: `Shared ${doc.originalFilename} (${scope})`,
-            metadata: { scope, targetUserIds, departmentId: share.departmentId },
-        });
+        if (scope === 'user') {
+            // ── Scope: user ──────────────────────────────────
+            // Employees can only share with own dept peers
+            const users = Array.isArray(targetUserIds) ? targetUserIds : [];
+            if (users.length === 0) {
+                return res.status(400).json({ success: false, message: 'targetUserIds is required for scope=user' });
+            }
 
-        res.status(201).json({ success: true, data: { share } });
+            // Employees: validate all targets are in the same department
+            if (req.user.role === 'team' && !myCtx.isLeader && !hasPermission(req.user, PERMISSIONS.DOCUMENT_SHARE)) {
+                const members = await DepartmentMember.find({
+                    userId: { $in: users },
+                    departmentId: myCtx.departmentId,
+                }).lean();
+                if (members.length !== users.length) {
+                    return res.status(403).json({ success: false, message: 'Employees can only share with members of their own department' });
+                }
+            }
+
+            // Remove existing user-scope shares for this doc by this sharer, then create new ones
+            await DocumentShare.deleteMany({ documentId: doc.documentId, sharedBy: req.user.userId, scope: 'user' });
+
+            const share = await DocumentShare.create({
+                shareId: `share_${uuidv4()}`,
+                documentId: doc.documentId,
+                sharedBy: req.user.userId,
+                organizationId: orgId,
+                scope: 'user',
+                targetUserIds: users,
+                visibility: 'all_members',
+            });
+
+            recordActivityFromReq(req, {
+                action: 'document.share',
+                category: 'document',
+                resourceType: 'document',
+                resourceId: doc.documentId,
+                message: `Shared ${doc.originalFilename} with ${users.length} user(s)`,
+                metadata: { scope: 'user', targetUserIds: users },
+            });
+
+            return res.status(201).json({ success: true, data: { share } });
+        }
+
+        if (scope === 'department') {
+            // ── Scope: department ──────────────────────────────
+            const targetDeptId = departmentId || doc.departmentId;
+            if (!targetDeptId) {
+                return res.status(400).json({ success: false, message: 'departmentId is required' });
+            }
+
+            const targetDept = await Department.findOne({ departmentId: targetDeptId }).lean();
+            if (!targetDept) {
+                return res.status(404).json({ success: false, message: 'Target department not found' });
+            }
+
+            // Determine same-dept vs cross-dept
+            const isSameDept = myCtx.departmentId === targetDeptId;
+
+            // Cross-department: employees cannot share to other departments
+            if (!isSameDept && req.user.role === 'team' && !myCtx.isLeader) {
+                return res.status(403).json({ success: false, message: 'Employees cannot share documents to other departments' });
+            }
+
+            // Determine visibility: cross-department defaults to leader_only
+            const finalVisibility = visibility === 'leader_only' || visibility === 'all_members'
+                ? visibility
+                : (isSameDept ? 'all_members' : 'leader_only');
+
+            // Remove existing department-scope share for this doc+dept by this sharer, then create
+            await DocumentShare.deleteMany({
+                documentId: doc.documentId,
+                sharedBy: req.user.userId,
+                scope: 'department',
+                departmentId: targetDeptId,
+            });
+
+            const share = await DocumentShare.create({
+                shareId: `share_${uuidv4()}`,
+                documentId: doc.documentId,
+                sharedBy: req.user.userId,
+                organizationId: orgId,
+                scope: 'department',
+                departmentId: targetDeptId,
+                visibility: finalVisibility,
+            });
+
+            recordActivityFromReq(req, {
+                action: 'document.share',
+                category: 'document',
+                resourceType: 'document',
+                resourceId: doc.documentId,
+                message: `Shared ${doc.originalFilename} with department ${targetDept.name} (${finalVisibility})`,
+                metadata: { scope: 'department', departmentId: targetDeptId, visibility: finalVisibility },
+            });
+
+            return res.status(201).json({ success: true, data: { share } });
+        }
+
+        // ── Scope: all ──────────────────────────────────────
+        if (scope === 'all') {
+            // Only leaders, managers, admins can share to everyone
+            if (req.user.role === 'team' && !myCtx.isLeader && !hasPermission(req.user, PERMISSIONS.DOCUMENT_SHARE)) {
+                return res.status(403).json({ success: false, message: 'Only leaders can share with everyone' });
+            }
+
+            // Remove existing all-scope share for this doc by this sharer
+            await DocumentShare.deleteMany({ documentId: doc.documentId, sharedBy: req.user.userId, scope: 'all' });
+
+            const share = await DocumentShare.create({
+                shareId: `share_${uuidv4()}`,
+                documentId: doc.documentId,
+                sharedBy: req.user.userId,
+                organizationId: orgId,
+                scope: 'all',
+                visibility: 'all_members',
+            });
+
+            recordActivityFromReq(req, {
+                action: 'document.share',
+                category: 'document',
+                resourceType: 'document',
+                resourceId: doc.documentId,
+                message: `Shared ${doc.originalFilename} with everyone`,
+                metadata: { scope: 'all' },
+            });
+
+            return res.status(201).json({ success: true, data: { share } });
+        }
     } catch (error) {
         next(error);
     }
 };
 
+/**
+ * Unshare a document.
+ *
+ * Query params (all optional):
+ *   scope         – 'user' | 'department' | 'all'
+ *   departmentId  – target department (required when scope='department')
+ *   targetUserId  – target user (required when scope='user')
+ *
+ * If no params → removes ALL shares by the current user (backward compat).
+ */
 export const unshareDocument = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const doc = await Document.findOne({ documentId: req.params.id });
@@ -592,8 +732,42 @@ export const unshareDocument = async (req: Request, res: Response, next: NextFun
         if (doc.uploadedBy !== req.user.userId && req.user.role !== 'admin' && req.user.role !== 'superAdmin') {
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
+
+        const { scope, departmentId, targetUserId } = req.query || {};
+
+        const filter: Record<string, unknown> = { documentId: doc.documentId, sharedBy: req.user.userId };
+
+        if (scope === 'user' && targetUserId) {
+            filter.scope = 'user';
+            // Remove specific user from targetUserIds; delete record if empty
+            const share = await DocumentShare.findOne(filter).lean();
+            if (share) {
+                const remaining = (share.targetUserIds || []).filter((id) => id !== targetUserId);
+                if (remaining.length > 0) {
+                    await DocumentShare.updateOne({ _id: share._id }, { $set: { targetUserIds: remaining } });
+                } else {
+                    await DocumentShare.deleteOne({ _id: share._id });
+                }
+            }
+            return res.json({ success: true, message: 'Share removed' });
+        }
+
+        if (scope === 'department' && departmentId) {
+            filter.scope = 'department';
+            filter.departmentId = departmentId;
+            await DocumentShare.deleteOne(filter);
+            return res.json({ success: true, message: 'Share removed' });
+        }
+
+        if (scope === 'all') {
+            filter.scope = 'all';
+            await DocumentShare.deleteOne(filter);
+            return res.json({ success: true, message: 'Share removed' });
+        }
+
+        // Fallback: remove all shares by this user for this document
         await DocumentShare.deleteMany({ documentId: doc.documentId, sharedBy: req.user.userId });
-        res.json({ success: true, message: 'Shares removed' });
+        res.json({ success: true, message: 'All shares removed' });
     } catch (error) {
         next(error);
     }
@@ -607,7 +781,35 @@ export const listDocumentShares = async (req: Request, res: Response, next: Next
             return res.status(403).json({ success: false, message: 'Forbidden' });
         }
         const shares = await DocumentShare.find({ documentId: doc.documentId }).lean();
-        res.json({ success: true, data: { shares } });
+
+        // Enrich with department names and user names
+        const enriched = await Promise.all(
+            shares.map(async (s) => {
+                let departmentName: string | null = null;
+                let targetUserNames: string[] = [];
+
+                if (s.departmentId) {
+                    const dept = await Department.findOne({ departmentId: s.departmentId }).lean();
+                    departmentName = dept?.name || null;
+                }
+                if (s.targetUserIds && s.targetUserIds.length > 0) {
+                    const users = await User.find({ userId: { $in: s.targetUserIds } })
+                        .select('userId fullName')
+                        .lean();
+                    targetUserNames = s.targetUserIds.map(
+                        (uid) => users.find((u) => u.userId === uid)?.fullName || uid
+                    );
+                }
+
+                return {
+                    ...s,
+                    departmentName,
+                    targetUserNames,
+                };
+            })
+        );
+
+        res.json({ success: true, data: { shares: enriched } });
     } catch (error) {
         next(error);
     }

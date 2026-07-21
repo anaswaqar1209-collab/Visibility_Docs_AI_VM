@@ -16,6 +16,7 @@ import {
     X,
     Building2,
     ChevronDown,
+    Settings,
 } from "lucide-react";
 import { useTheme } from "@/context/ColorContext";
 import { usePermissions } from "@/context/PermissionsContext";
@@ -114,12 +115,19 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
             roles: ["admin", "superAdmin"],
             allow: () => role === "admin" || role === "superAdmin" || hasPermission("department.manage"),
         },
+        {
+            href: "/admin/settings",
+            label: "AI Settings",
+            icon: Settings,
+            roles: ["admin", "superAdmin"],
+            allow: () => role === "admin" || role === "superAdmin",
+        },
     ];
 
     const visibleNav = nav
         .filter((n) => n.roles.includes(role) && (n.allow ? n.allow() : true))
         .filter((n) =>
-            !isSuperAdmin || ["/admin/documents", "/chat", "/activity", "/admin/admins"].includes(n.href)
+            !isSuperAdmin || ["/admin/documents", "/chat", "/activity", "/admin/admins", "/admin/settings"].includes(n.href)
         );
 
     const logout = () => {

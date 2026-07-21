@@ -13,6 +13,7 @@ import superAdminRoutes from './routes/superAdmin';
 import activityRoutes from './routes/activity';
 import groqRoutes from './routes/groq';
 import departmentRoutes from './routes/departments';
+import settingsRoutes from './routes/settings';
 import { errorHandler, notFound } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
 import { listAllDocumentIntelligence, reprocessDocument } from './controllers/documentsController';
@@ -59,6 +60,7 @@ app.use('/api/docs/team', teamRoutes);
 app.use('/api/docs/activity', activityRoutes);
 app.use('/api/docs/groq', groqRoutes);
 app.use('/api/docs/departments', departmentRoutes);
+app.use('/api/docs/settings', settingsRoutes);
 app.use('/api/docs/super-admin', superAdminRoutes);
 
 app.use(notFound);

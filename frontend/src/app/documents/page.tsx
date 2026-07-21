@@ -3,12 +3,13 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-    FileText, Upload, Trash2, RefreshCw, Eye, Search, FolderUp, Copy, X, Loader2, Info, Filter,
+    FileText, Upload, Trash2, RefreshCw, Eye, Search, FolderUp, Copy, X, Loader2, Info, Filter, Share2,
 } from "lucide-react";
 import ClientLayout from "@/components/ClientLayout";
 import FilterSelect from "@/components/FilterSelect";
 import ClassifyAgentPopup from "@/components/ClassifyAgentPopup";
 import LibraryPagination from "@/components/LibraryPagination";
+import ShareModal from "@/components/ShareModal";
 import { PageHeader, EmptyState } from "@/components/ui";
 import { useTheme } from "@/context/ColorContext";
 import { apiRequest } from "@/lib/apiClient";
@@ -19,6 +20,7 @@ import {
     getFileTypeLabel,
 } from "@/lib/fileValidation";
 import { usePermissions } from "@/context/PermissionsContext";
+import { getStoredUser } from "@/lib/authSession";
 
 type DocItem = {
     documentId: string;
@@ -30,6 +32,7 @@ type DocItem = {
     visibilityScope?: "personal" | "department" | null;
     departmentId?: string | null;
     uploaderIsLeader?: boolean;
+    uploadedBy?: string;
     createdAt: string;
     duplicateCount?: number;
     isDuplicate?: boolean;
@@ -134,6 +137,7 @@ function DocumentsContent() {
     const isDark = theme.name === "dark";
     const containerRef = useRef<HTMLDivElement>(null);
     const { canUpload, canViewDocs, canDeleteDocs } = usePermissions();
+    const me = getStoredUser<{ userId?: string }>();
 
     const [docs, setDocs] = useState<DocItem[]>([]);
     const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 10, total: 0, totalPages: 0 });
@@ -158,6 +162,7 @@ function DocumentsContent() {
     const [classifyQueue, setClassifyQueue] = useState<ClassifyQueueItem[]>([]);
     const [toast, setToast] = useState<string | null>(null);
     const [filtersOpen, setFiltersOpen] = useState(false);
+    const [sharingDoc, setSharingDoc] = useState<{ documentId: string; filename: string } | null>(null);
 
     const activeSort = SORT_PRESETS.find((s) => s.value === sortPreset) || SORT_PRESETS[0];
 
@@ -840,6 +845,12 @@ function DocumentsContent() {
                                             <Trash2 size={14} /> Delete
                                         </button>
                                     )}
+                                    {allowView && doc.uploadedBy === me?.userId && (
+                                        <button type="button" onClick={() => setSharingDoc({ documentId: doc.documentId, filename: doc.originalFilename })}
+                                            className="btn-secondary rounded-lg px-3 py-2 text-sm flex items-center justify-center gap-1.5 min-h-10">
+                                            <Share2 size={14} /> Share
+                                        </button>
+                                    )}
                                 </div>
                             </li>
                         );})}
@@ -858,6 +869,17 @@ function DocumentsContent() {
                     textMutedClass={colors.textMuted}
                 />
             </div>
+            )}
+
+            {/* Share Modal */}
+            {sharingDoc && (
+                <ShareModal
+                    documentId={sharingDoc.documentId}
+                    filename={sharingDoc.filename}
+                    open={true}
+                    onClose={() => setSharingDoc(null)}
+                    onShared={() => load()}
+                />
             )}
         </div>
     );

@@ -232,16 +232,32 @@ export const listDocuments = async (req: Request, res: Response, next: NextFunct
         const sharedDocs = documentIds.length
             ? await DocumentShare.find({
                   documentId: { $in: documentIds },
-                  scope: 'department',
+                  $or: [
+                      { scope: 'department' },
+                      { scope: 'all' },
+                  ],
                   ...(departmentIdQuery ? { departmentId: departmentIdQuery } : {}),
               })
-                  .select('documentId')
+                  .select('documentId scope visibility departmentId')
                   .lean()
             : [];
-        const sharedDocumentSet = new Set(sharedDocs.map((share) => share.documentId));
+
+        // Build per-document share summary
+        const shareMap: Record<string, { sharedToDepartment: boolean; shareCount: number; hasAllShare: boolean }> = {};
+        for (const s of sharedDocs) {
+            if (!shareMap[s.documentId]) {
+                shareMap[s.documentId] = { sharedToDepartment: false, shareCount: 0, hasAllShare: false };
+            }
+            shareMap[s.documentId].shareCount++;
+            if (s.scope === 'department') shareMap[s.documentId].sharedToDepartment = true;
+            if (s.scope === 'all') shareMap[s.documentId].hasAllShare = true;
+        }
+
         const documentsWithShareStatus = documents.map((doc) => ({
             ...doc,
-            sharedToDepartment: Boolean(doc.documentId && sharedDocumentSet.has(doc.documentId)),
+            sharedToDepartment: shareMap[doc.documentId]?.sharedToDepartment || false,
+            shareCount: shareMap[doc.documentId]?.shareCount || 0,
+            hasAllShare: shareMap[doc.documentId]?.hasAllShare || false,
         }));
 
         res.json({

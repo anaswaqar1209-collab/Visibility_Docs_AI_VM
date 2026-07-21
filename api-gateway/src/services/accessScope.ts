@@ -25,8 +25,14 @@ export type UserDeptContext = {
     departmentId: string | null;
     orgRoleId: string | null;
     isLeader: boolean;
+    /** Documents shared directly with this user (scope='user') */
     sharedDocumentIds: string[];
+    /** Department-scoped shares with all_members visibility (visible to all dept members) */
     departmentSharedDocumentIds: string[];
+    /** Department-scoped shares with leader_only visibility (visible only to leaders) */
+    leaderOnlyDocumentIds: string[];
+    /** All-org shares (scope='all', visible to everyone in org) */
+    allOrgDocumentIds: string[];
 };
 
 export function hasPermission(user: AuthUser, permission: string): boolean {
@@ -47,6 +53,8 @@ export async function loadUserDeptContext(user: AuthUser): Promise<UserDeptConte
         isLeader: false,
         sharedDocumentIds: [],
         departmentSharedDocumentIds: [],
+        leaderOnlyDocumentIds: [],
+        allOrgDocumentIds: [],
     };
     if (!user.userId) return empty;
 
@@ -67,19 +75,35 @@ export async function loadUserDeptContext(user: AuthUser): Promise<UserDeptConte
             ...(departmentId
                 ? [{ scope: 'department', departmentId }]
                 : []),
+            { scope: 'all' },
         ],
     };
     if (user.organizationId) {
         shareFilter.organizationId = user.organizationId;
     }
 
-    const shares = await DocumentShare.find(shareFilter).select('documentId scope departmentId').lean();
-    const sharedDocumentIds = shares.map((s) => s.documentId);
-    const departmentSharedDocumentIds = shares
-        .filter((s) => s.scope === 'department' && s.departmentId === departmentId)
-        .map((s) => s.documentId);
+    const shares = await DocumentShare.find(shareFilter).select('documentId scope departmentId visibility').lean();
 
-    return { departmentId, orgRoleId, isLeader, sharedDocumentIds, departmentSharedDocumentIds };
+    const sharedDocumentIds: string[] = [];
+    const departmentSharedDocumentIds: string[] = [];
+    const leaderOnlyDocumentIds: string[] = [];
+    const allOrgDocumentIds: string[] = [];
+
+    for (const s of shares) {
+        if (s.scope === 'user') {
+            sharedDocumentIds.push(s.documentId);
+        } else if (s.scope === 'all') {
+            allOrgDocumentIds.push(s.documentId);
+        } else if (s.scope === 'department') {
+            if (s.visibility === 'leader_only') {
+                leaderOnlyDocumentIds.push(s.documentId);
+            } else {
+                departmentSharedDocumentIds.push(s.documentId);
+            }
+        }
+    }
+
+    return { departmentId, orgRoleId, isLeader, sharedDocumentIds, departmentSharedDocumentIds, leaderOnlyDocumentIds, allOrgDocumentIds };
 }
 
 /**
@@ -148,10 +172,25 @@ export async function buildDocumentFilter(
             });
         }
 
-        // Explicit shares (leader allow-list)
+        // Explicit user shares (always visible)
         if (ctx.sharedDocumentIds.length > 0) {
             orClauses.push({ documentId: { $in: ctx.sharedDocumentIds } });
         }
+
+        // Department shares with all_members visibility (visible to all dept members)
+        if (ctx.departmentSharedDocumentIds.length > 0) {
+            orClauses.push({ documentId: { $in: ctx.departmentSharedDocumentIds } });
+        }
+
+        // Department shares with leader_only visibility (visible only to leaders)
+        if (ctx.isLeader && ctx.leaderOnlyDocumentIds.length > 0) {
+            orClauses.push({ documentId: { $in: ctx.leaderOnlyDocumentIds } });
+        }
+    }
+
+    // All-org shares (scope='all', visible to everyone in org)
+    if (ctx.allOrgDocumentIds.length > 0) {
+        orClauses.push({ documentId: { $in: ctx.allOrgDocumentIds } });
     }
 
     const searchOr = base.$or;
@@ -250,15 +289,24 @@ export async function canAccessDocument(
     ) {
         if (deptCtx.isLeader) return true;
         if (!doc.uploaderIsLeader) return true;
-        // Leader doc: need share
-        if (doc.documentId && deptCtx.sharedDocumentIds.includes(doc.documentId)) {
+        // Leader doc: need share (user-scope or all_members dept-scope)
+        if (doc.documentId && (deptCtx.sharedDocumentIds.includes(doc.documentId) || deptCtx.departmentSharedDocumentIds.includes(doc.documentId))) {
             return true;
         }
         return false;
     }
 
-    // Shared explicitly even if edge cases
-    if (doc.documentId && deptCtx.sharedDocumentIds.includes(doc.documentId)) {
+    // Shared explicitly (user-scope, all_members dept-scope, or all-org scope)
+    if (doc.documentId && (
+        deptCtx.sharedDocumentIds.includes(doc.documentId) ||
+        deptCtx.departmentSharedDocumentIds.includes(doc.documentId) ||
+        deptCtx.allOrgDocumentIds.includes(doc.documentId)
+    )) {
+        return true;
+    }
+
+    // Leader-only shares (only leaders can access)
+    if (doc.documentId && deptCtx.isLeader && deptCtx.leaderOnlyDocumentIds.includes(doc.documentId)) {
         return true;
     }
 
