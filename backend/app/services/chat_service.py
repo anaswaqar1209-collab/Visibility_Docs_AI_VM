@@ -682,6 +682,18 @@ class ChatService:
             search_results = rag_service.hybrid_search(**retry_kwargs)
 
         if not search_results:
+            # ── Fallback: when a specific doc is selected but search found nothing,
+            # fetch any available chunks from the selected doc directly.
+            if resolved_ids:
+                try:
+                    fb_results = rag_service._fetch_any_chunks(resolved_ids, organization_id, limit_per_doc=3)
+                    if fb_results:
+                        search_results = fb_results
+                        chat_log.info(f"Fallback chunks: {len(search_results)} for {len(resolved_ids)} docs")
+                except Exception:
+                    pass
+
+        if not search_results:
             resumes = []
             if is_resume_query:
                 try:
@@ -709,7 +721,6 @@ class ChatService:
                         "score": r.get("cv_score", 0) / 100.0,
                     })
                 resume_context = "\n".join(lines)
-                # Also inject rich resume details (skills, experience, education, certs)
                 res_doc_ids = [r["id"] for r in resumes if r.get("id")]
                 res_details = self._fetch_resume_details(res_doc_ids, organization_id)
                 if res_details:
@@ -717,33 +728,52 @@ class ChatService:
                     if details_block:
                         resume_context = resume_context + "\n\n" + details_block
 
-            # If search returned nothing but we are clearly in finance/invoice mode,
-            # answer directly from structured extraction data when available.
-            finance_context = ""
+            # ── Finance/table data fallback: extraction + any available chunks ──
             if is_finance_query and extraction_doc_ids:
                 finance_context = self._fetch_extraction_summary(extraction_doc_ids, organization_id)
-            if finance_context:
-                chat_log.search_strategy("Structured Extraction Fallback", "no vector matches, using invoice metadata")
-                finance_prompt = (
-                    "You are a Finance Agent for Visibility Docs AI.\n\n"
-                    "Use the provided structured extraction summary to answer the question exactly.\n"
-                    "If the answer is missing, say you cannot find it in the documents.\n"
-                    "Do not invent numbers, dates, or names.\n"
-                )
-                chat_log.llm_call("llama-3.3-70b-versatile", len(finance_context), len(question), 1)
-                llm_t0 = time.time()
-                answer = conversation_service.chat(question, finance_context, session_id=sid, system_prompt=finance_prompt)
-                chat_log.llm_response(time.time() - llm_t0, len(answer))
-                self._save_exchange(sid, question, answer, [], is_first)
-                total = time.time() - t_start
-                chat_log.chat_end(total, 0)
-                return {
-                    "answer": answer,
-                    "sources": [],
-                    "document_id": extraction_doc_ids[0] if extraction_doc_ids else "",
-                    "history": conversation_service.get_history(sid),
-                    "session_id": sid,
-                }
+                if finance_context or search_results:
+                    if not finance_context:
+                        finance_context = ""
+                    if search_results:
+                        raw_parts = []
+                        seen_docs = set()
+                        for r in search_results:
+                            did = r.get("document_id", "")
+                            if did in seen_docs:
+                                continue
+                            seen_docs.add(did)
+                            ct = r.get("chunk_text", "")
+                            if ct:
+                                display = id_to_display.get(did, r.get("document_title", ""))
+                                raw_parts.append(f"[Document: {display}]: {ct}")
+                        if raw_parts:
+                            raw_block = "\n\n".join(raw_parts[:5])
+                            if finance_context:
+                                finance_context += "\n\n" + raw_block
+                            else:
+                                finance_context = raw_block
+                    if finance_context:
+                        chat_log.search_strategy("Finance from extraction+chunks", f"{len(finance_context)} chars")
+                        finance_prompt = (
+                            "You are a Finance Agent for Visibility Docs AI.\n\n"
+                            "Use the provided data to answer the question exactly.\n"
+                            "If the answer is missing, say you cannot find it in the documents.\n"
+                            "Do not invent numbers, dates, or names.\n"
+                        )
+                        chat_log.llm_call("llama-3.3-70b-versatile", len(finance_context), len(question), 1)
+                        llm_t0 = time.time()
+                        answer = conversation_service.chat(question, finance_context, session_id=sid, system_prompt=finance_prompt)
+                        chat_log.llm_response(time.time() - llm_t0, len(answer))
+                        self._save_exchange(sid, question, answer, sources[:5] if sources else [], is_first)
+                        total = time.time() - t_start
+                        chat_log.chat_end(total, 0)
+                        return {
+                            "answer": answer,
+                            "sources": sources[:5] if sources else [],
+                            "document_id": extraction_doc_ids[0] if extraction_doc_ids else "",
+                            "history": conversation_service.get_history(sid),
+                            "session_id": sid,
+                        }
 
             chat_log.search_strategy("Context Building", "no results found")
             chat_log.warn("No relevant documents found in search")
