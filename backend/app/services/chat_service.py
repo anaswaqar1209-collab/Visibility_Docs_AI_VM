@@ -100,6 +100,61 @@ class ChatService:
         if is_first:
             self._auto_title(session_id, question)
 
+    def _fetch_raw_text(self, document_ids: list, organization_id: str,
+                        max_chars: int = 28000, titles: list = None) -> str:
+        """Fetch raw_text (full document text) for selected docs. Critical for Excel/table docs
+        where chunks may be missing or extraction truncates data."""
+        if not document_ids:
+            return ""
+        try:
+            unique_ids = set(document_ids)
+            title_set = set((t or "").lower().strip() for t in (titles or []))
+            result = SupabaseDB.select("documents",
+                columns="id, title, document_type, raw_text",
+                filters={"organization_id": organization_id},
+                limit=200,
+            )
+            data = getattr(result, "data", result if isinstance(result, list) else [])
+            parts = []
+            total = 0
+            matched_any = False
+            for row in (data or []):
+                raw = row.get("raw_text") or ""
+                if not raw:
+                    continue
+                doc_id = row.get("id", "")
+                doc_title = (row.get("title") or "").lower().strip()
+                # Match by ID or by title
+                id_match = doc_id in unique_ids
+                title_match = doc_title in title_set if title_set else False
+                if not id_match and not title_match:
+                    continue
+                matched_any = True
+                display = row.get("title") or doc_id
+                remaining = max_chars - total
+                if remaining <= 0:
+                    break
+                truncated = raw[:remaining]
+                parts.append(f"[Document: {display} (Full Source Text)]:\n{truncated}")
+                total += len(truncated)
+            # Fallback: if no match by ID or title, include ALL org docs with raw_text
+            # This handles ID mismatches between local/remote databases
+            if not matched_any:
+                for row in (data or []):
+                    raw = row.get("raw_text") or ""
+                    if not raw:
+                        continue
+                    display = row.get("title") or row.get("id", "")
+                    remaining = max_chars - total
+                    if remaining <= 0:
+                        break
+                    truncated = raw[:remaining]
+                    parts.append(f"[Document: {display} (Full Source Text)]:\n{truncated}")
+                    total += len(truncated)
+            return "\n\n".join(parts) if parts else ""
+        except Exception:
+            return ""
+
     def _fetch_extraction_summary(self, document_ids: list, organization_id: str) -> str:
         if not document_ids:
             return ""
@@ -178,6 +233,21 @@ class ChatService:
                         lines.append(f"    {key}:")
                         for i, item in enumerate(val, 1):
                             lines.append(f"      {i}. {item}")
+                    elif isinstance(val, list) and val and key in ("line_items", "items"):
+                        lines.append(f"    {key}:")
+                        for item in val[:200]:
+                            if isinstance(item, dict):
+                                parts = []
+                                for field in ("description", "quantity", "unit_price", "price", "total", "amount",
+                                              "vendor_name", "vendor_city", "client_name", "client_city",
+                                              "invoice_no", "order_date", "delivery_date", "category",
+                                              "payment_mode", "status"):
+                                    if item.get(field) not in (None, "", []):
+                                        parts.append(f"{field}={item.get(field)}")
+                                if parts:
+                                    lines.append(f"      - " + ", ".join(parts))
+                            else:
+                                lines.append(f"      - {item}")
                     elif isinstance(val, str) and val:
                         lines.append(f"    {key}: {val}")
                     elif isinstance(val, (int, float)):
@@ -728,52 +798,69 @@ class ChatService:
                     if details_block:
                         resume_context = resume_context + "\n\n" + details_block
 
-            # ── Finance/table data fallback: extraction + any available chunks ──
+            # ── Finance/table data fallback: extraction + raw source text ──
             if is_finance_query and extraction_doc_ids:
                 finance_context = self._fetch_extraction_summary(extraction_doc_ids, organization_id)
-                if finance_context or search_results:
-                    if not finance_context:
-                        finance_context = ""
-                    if search_results:
-                        raw_parts = []
-                        seen_docs = set()
-                        for r in search_results:
-                            did = r.get("document_id", "")
-                            if did in seen_docs:
-                                continue
-                            seen_docs.add(did)
-                            ct = r.get("chunk_text", "")
-                            if ct:
-                                display = id_to_display.get(did, r.get("document_title", ""))
-                                raw_parts.append(f"[Document: {display}]: {ct}")
-                        if raw_parts:
-                            raw_block = "\n\n".join(raw_parts[:5])
-                            if finance_context:
-                                finance_context += "\n\n" + raw_block
-                            else:
-                                finance_context = raw_block
-                    if finance_context:
-                        chat_log.search_strategy("Finance from extraction+chunks", f"{len(finance_context)} chars")
-                        finance_prompt = (
-                            "You are a Finance Agent for Visibility Docs AI.\n\n"
-                            "Use the provided data to answer the question exactly.\n"
-                            "If the answer is missing, say you cannot find it in the documents.\n"
-                            "Do not invent numbers, dates, or names.\n"
-                        )
-                        chat_log.llm_call("llama-3.3-70b-versatile", len(finance_context), len(question), 1)
-                        llm_t0 = time.time()
-                        answer = conversation_service.chat(question, finance_context, session_id=sid, system_prompt=finance_prompt)
-                        chat_log.llm_response(time.time() - llm_t0, len(answer))
-                        self._save_exchange(sid, question, answer, sources[:5] if sources else [], is_first)
-                        total = time.time() - t_start
-                        chat_log.chat_end(total, 0)
-                        return {
-                            "answer": answer,
-                            "sources": sources[:5] if sources else [],
-                            "document_id": extraction_doc_ids[0] if extraction_doc_ids else "",
-                            "history": conversation_service.get_history(sid),
-                            "session_id": sid,
-                        }
+                if not finance_context:
+                    finance_context = ""
+
+                # Include raw source text (full table/document) so LLM sees ALL data
+                # Pass titles from search results for title-based matching (handles ID mismatches)
+                search_titles = list({r.get("document_title", "") for r in (search_results or []) if r.get("document_title")})
+                raw_text_block = self._fetch_raw_text(extraction_doc_ids, organization_id, titles=search_titles)
+                if raw_text_block:
+                    finance_context += "\n\n" + raw_text_block
+
+                # Also include search result chunks (skip structured summaries when raw_text available)
+                if search_results:
+                    raw_parts = []
+                    seen_docs = set()
+                    for r in search_results:
+                        ct = r.get("chunk_text", "")
+                        if raw_text_block and ct and "Structured Document Summary" in ct:
+                            continue
+                        did = r.get("document_id", "")
+                        if did in seen_docs:
+                            continue
+                        seen_docs.add(did)
+                        if ct:
+                            display = id_to_display.get(did, r.get("document_title", ""))
+                            raw_parts.append(f"[Document: {display}]: {ct}")
+                    if raw_parts:
+                        raw_block = "\n\n".join(raw_parts[:5])
+                        if finance_context:
+                            finance_context += "\n\n" + raw_block
+                        else:
+                            finance_context = raw_block
+                if finance_context:
+                    chat_log.search_strategy("Finance from extraction+chunks", f"{len(finance_context)} chars")
+                    finance_prompt = (
+                        "You are a Finance Agent for Visibility Docs AI.\n\n"
+                        "CRITICAL INSTRUCTION: Ignore any 'field_confidence' values in the data. "
+                        "Those are metadata meant for debugging, not actual content.\n"
+                        "The document contains a FULL TABLE with columns: Vendor Name, Vendor City, "
+                        "Client Name, Client City, Invoice No, Order Date, Delivery Date, Category, "
+                        "Quantity, Unit Price, Total Amount, Payment Mode, Status.\n"
+                        "Use the table data to answer questions — it has all the vendor information.\n"
+                        "If the answer is truly missing from ALL provided data, say so.\n"
+                        "Do not invent numbers, dates, or names.\n"
+                    )
+                    chat_log.llm_call("llama-3.3-70b-versatile", len(finance_context), len(question), 1)
+                    # DEBUG: show context length and first 2000 chars in answer
+                    debug_ctx = f"[DEBUG] Context length: {len(finance_context)} chars. First 2000 chars:\n{finance_context[:2000]}"
+                    llm_t0 = time.time()
+                    answer = debug_ctx + "\n\n--- LLM Response ---\n" + conversation_service.chat(question, finance_context, session_id=sid, system_prompt=finance_prompt)
+                    chat_log.llm_response(time.time() - llm_t0, len(answer))
+                    self._save_exchange(sid, question, answer, sources[:5] if sources else [], is_first)
+                    total = time.time() - t_start
+                    chat_log.chat_end(total, 0)
+                    return {
+                        "answer": answer,
+                        "sources": sources[:5] if sources else [],
+                        "document_id": extraction_doc_ids[0] if extraction_doc_ids else "",
+                        "history": conversation_service.get_history(sid),
+                        "session_id": sid,
+                    }
 
             chat_log.search_strategy("Context Building", "no results found")
             chat_log.warn("No relevant documents found in search")
@@ -843,10 +930,16 @@ class ChatService:
             pass
 
         # ── Build context with display names ──
+        # Skip "Structured Document Summary" chunks when extraction data is available
+        # (they contain field_confidence debugging metadata that confuses LLMs)
+        has_extraction = bool(extraction_doc_ids)
         context_parts = []
         for r in search_results:
+            ct = r.get("chunk_text", "")
+            if has_extraction and ct.startswith("Structured Document Summary"):
+                continue
             display = id_to_display.get(r["document_id"], r["document_title"])
-            context_parts.append(f"[Document: {display}]: {r['chunk_text']}")
+            context_parts.append(f"[Document: {display}]: {ct}")
 
         # ── Compact field summary (for field queries like "saare numbers") ──
         field_summary = self._build_field_summary(search_results, field_type, id_to_display) if field_type else None
@@ -867,15 +960,17 @@ class ChatService:
             if len(context) > MAX_CONTEXT_CHARS:
                 kept_parts, kept_sources = [], []
                 total = 0
-                for part, src in zip(context_parts, sources):
+                for i, part in enumerate(context_parts):
                     added = len(part) + 2
                     if total + added > MAX_CONTEXT_CHARS:
                         break
                     kept_parts.append(part)
-                    kept_sources.append(src)
+                    if i < len(sources):
+                        kept_sources.append(sources[i])
                     total += added
                 context = "\n\n".join(kept_parts)
-                sources = kept_sources
+                if kept_sources:
+                    sources = kept_sources
                 context_len = len(context)
                 chat_log.info(f"Truncated context to {context_len} chars ({len(sources)} sources)")
 
@@ -918,6 +1013,13 @@ class ChatService:
             if extraction_summary:
                 context = extraction_summary + "\n\n" + context if context else extraction_summary
                 chat_log.info(f"Injected structured extraction summary for {len(extraction_doc_ids)} documents")
+            # Also inject raw source text for table/finance data — critical for Excel docs
+            # where chunks may be truncated or IDs mismatch between local/remote DBs.
+            # _fetch_raw_text handles ID fallback via title matching internally.
+            raw_text_block = self._fetch_raw_text(extraction_doc_ids, organization_id)
+            if raw_text_block:
+                context = context + "\n\n" + raw_text_block if context else raw_text_block
+                chat_log.info(f"Injected raw text: {len(raw_text_block)} chars")
 
         chat_log.search_strategy("Context Building", f"{len(search_results)} chunks → {context_len} chars")
         doc_types_seen = {}

@@ -766,7 +766,7 @@ class RAGService:
                 elif isinstance(value, list):
                     if key == "line_items":
                         summary_lines.append("line_items:")
-                        for item in value[:25]:
+                        for item in value[:200]:
                             if isinstance(item, dict):
                                 parts = []
                                 for field in ("description", "quantity", "unit_price", "price", "total", "amount"):
@@ -783,13 +783,9 @@ class RAGService:
                     if nested:
                         summary_lines.append(f"{key}: {nested}")
 
-            if field_confidence:
-                conf_bits = []
-                for key, value in field_confidence.items():
-                    if isinstance(value, (int, float)):
-                        conf_bits.append(f"{key}={value:.2f}")
-                if conf_bits:
-                    summary_lines.append("field_confidence: " + ", ".join(conf_bits[:25]))
+            # field_confidence intentionally omitted — it is debugging metadata that
+            # confuses LLMs (they treat "field_confidence: vendor_name=0.00" as
+            # evidence the value is missing, even when the actual data is present).
 
             summary_text = "\n".join(summary_lines).strip()
             if len(summary_text.split()) < 5:
