@@ -12,6 +12,7 @@ export type ScopeLibraryDoc = {
     originalFilename: string;
     status: string;
     pythonDocumentId?: string | null;
+    cv_score?: number | null;
 };
 
 type ChatScopePanelProps = {
@@ -212,6 +213,11 @@ export default function ChatScopePanel({
                                                 )}
                                                 <span className={`${textSecondary} line-clamp-2`}>
                                                     {doc.originalFilename}
+                                                    {doc.cv_score !== undefined && doc.cv_score !== null && (
+                                                        <span className="ml-2 inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-amber-500 border border-amber-500/20 shrink-0">
+                                                            ⭐ Score: {doc.cv_score}/100
+                                                        </span>
+                                                    )}
                                                     <span className={`block text-[11px] mt-0.5 ${textMuted}`}>
                                                         {doc.status}
                                                     </span>
