@@ -77,16 +77,17 @@ If the document is a **Resume/CV**, ALSO include a "cv_evaluation" object:
 }
 ```
 
-Scoring guidelines (0-100):
-- **overall_score**: General impression — how strong is this candidate overall
-- **skills_score**: Relevance and depth of technical/soft skills
-- **experience_score**: Quality and relevance of work experience
-- **education_score**: Quality of educational background
-- **completeness_score**: How complete is the CV (missing sections reduce score)
-- **strengths**: Top 2-4 positive aspects
-- **areas_for_improvement**: Top 1-3 gaps or missing info
-- **recommendation**: Brief hiring recommendation (1 sentence)
-- **evaluation_summary**: One-sentence summary of the candidate
+Scoring guidelines (STRICT EVALUATION MATRIX: 0-100):
+Be strict and realistic. Do NOT inflate scores:
+- **experience_score**: 35% weight. 85+ reserved for 7+ yrs experience with quantifiable metrics. Average CVs get 50-68.
+- **skills_score**: 30% weight. 85+ requires advanced skills + active certifications. Deduct 10-15 points if no certifications.
+- **education_score**: 20% weight. Relevant degree from reputable university.
+- **completeness_score**: 15% weight. Deduct 15 pts for missing work history dates or vague descriptions.
+- **overall_score**: `(0.35 * experience_score) + (0.30 * skills_score) + (0.20 * education_score) + (0.15 * completeness_score)`.
+- **strengths**: Top 2-4 positive aspects.
+- **areas_for_improvement**: Top 1-3 gaps or missing info.
+- **recommendation**: Brief hiring recommendation (1 sentence).
+- **evaluation_summary**: One-sentence summary of the candidate.
 
 ## Few-Shot Example
 

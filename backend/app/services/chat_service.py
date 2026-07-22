@@ -4,13 +4,13 @@ from .rag_service import rag_service
 from .document_service import document_service
 from ..database import SupabaseDB
 from .orchestration_logger import get_chat_logger, C
-from .agent_orchestrator import _load_phase3_prompt, _load_prompt, DOCUMENT_TO_PHASE3_AGENT, PHASE3_AGENT_PROMPT_MAP
+from .agent_orchestrator import _load_phase3_prompt, _load_prompt, get_phase3_prompt_for_doc, DOCUMENT_TO_PHASE3_AGENT, PHASE3_AGENT_PROMPT_MAP
 
-_RESUME_KEYWORDS = ["resume", "cv ", "candidate", "applicant", "hiring", "recruit",
+_RESUME_KEYWORDS = ["resume", "cv", "cvs", "candidate", "applicant", "hiring", "recruit",
                     "top.*resume", "best.*candidate", "rank.*resume", "score.*resume",
-                    "sorted.*resume", "highest.*score", "top.*candidate",
+                    "sorted.*resume", "highest.*score", "top.*candidate", "eval", "score",
                     "give me.*top", "list.*resume", "show.*candidate", "list.*candidate",
-                    "top.*resume", "recommend.*candidate", "best.*fit"]
+                    "top.*resume", "recommend.*candidate", "best.*fit", "ranking", "marks"]
 
 _AGGREGATE_KEYWORDS = [r"\bsum\b", r"\btotal\b", r"\baggregate\b", r"\bcombine\b",
                        r"\boverall\b", r"\bgrand total\b", r"\ball\b.*\btotal\b",
@@ -99,6 +99,113 @@ class ChatService:
         SupabaseDB.save_chat_message(session_id, "assistant", answer, sources)
         if is_first:
             self._auto_title(session_id, question)
+
+    def _clean_json_response_to_text(self, answer: str) -> str:
+        """Convert any raw JSON response / code block into clean human-readable ChatGPT-style Markdown."""
+        if not answer or not isinstance(answer, str):
+            return answer
+
+        text = answer.strip()
+        # Strip ```json ... ``` code blocks if the response is wrapped in code blocks
+        if text.startswith("```json") and text.endswith("```"):
+            text = text[7:-3].strip()
+        elif text.startswith("```") and text.endswith("```"):
+            text = text[3:-3].strip()
+
+        if (text.startswith("{") and text.endswith("}")) or (text.startswith("[") and text.endswith("]")):
+            try:
+                import json
+                data = json.loads(text)
+                if isinstance(data, dict):
+                    lines = []
+                    doc_num = data.get("invoice_number") or data.get("document_number") or data.get("sop_number") or data.get("po_number") or data.get("report_number")
+                    title = data.get("document_title") or data.get("vendor_name") or "Document Details"
+                    if doc_num:
+                        lines.append(f"### 📄 {title} ({doc_num})\n")
+                    else:
+                        lines.append(f"### 📄 {title}\n")
+
+                    line_items = None
+                    for key, val in data.items():
+                        if key in ("_field_confidence", "document_title", "document_type"):
+                            continue
+                        if key in ("line_items", "items", "procedure_steps", "declarations", "inspected_items"):
+                            line_items = val
+                            continue
+                        if val is not None and val != "":
+                            clean_key = key.replace("_", " ").title()
+                            lines.append(f"- **{clean_key}:** {val}")
+
+                    if line_items and isinstance(line_items, list) and len(line_items) > 0:
+                        lines.append("\n#### 📋 Items / Details:\n")
+                        if isinstance(line_items[0], dict):
+                            cols = list(line_items[0].keys())
+                            clean_cols = [c.replace("_", " ").title() for c in cols]
+                            lines.append("| " + " | ".join(clean_cols) + " |")
+                            lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
+                            for item in line_items:
+                                row_vals = [str(item.get(c, "")) if item.get(c) is not None else "" for c in cols]
+                                lines.append("| " + " | ".join(row_vals) + " |")
+                        else:
+                            for item in line_items:
+                                lines.append(f"- {item}")
+
+                    return "\n".join(lines)
+            except Exception:
+                pass
+        return answer
+
+    def _build_multi_prompt_for_search_results(self, doc_type_counts: dict, agents: set) -> tuple[str, list[str]]:
+        """Load and sanitize multiple .md prompt files for top matched document types.
+        Compactly limits loaded prompts to top 3 matched types (max ~1,200 chars per prompt)
+        to stay safely under Groq token limits while providing specialized domain guidelines."""
+        import re
+        loaded_prompts = []
+        loaded_paths = []
+        seen_paths = set()
+
+        # Sort document types by frequency count descending, filter out 'other' if specific types exist
+        sorted_types = [dt for dt, _ in sorted(doc_type_counts.items(), key=lambda x: x[1], reverse=True) if dt]
+        if len(sorted_types) > 1 and "other" in sorted_types:
+            sorted_types.remove("other")
+
+        # Pick top 3 matched document types max to keep prompt compact and fast
+        top_types = sorted_types[:3]
+
+        pairs = []
+        for dt in top_types:
+            p3a = DOCUMENT_TO_PHASE3_AGENT.get(dt, "other_agent")
+            pairs.append((dt, p3a))
+
+        if not pairs and agents:
+            for ag in list(agents)[:3]:
+                if ag and ag != "other_agent":
+                    pairs.append(("", ag))
+
+        if not pairs:
+            pairs.append(("", "other_agent"))
+
+        for dt, ag in pairs:
+            raw_prompt, prompt_path = get_phase3_prompt_for_doc(dt, ag)
+            if raw_prompt and prompt_path not in seen_paths:
+                seen_paths.add(prompt_path)
+                # Sanitize extraction prompt for Q&A: strip out JSON examples, schemas, and JSON mode commands
+                cleaned = re.sub(r"##\s*(?:Field Extraction Example|Extraction Example|Field Specifications).*?(?=\n##|\Z)", "", raw_prompt, flags=re.DOTALL | re.IGNORECASE)
+                cleaned = re.sub(r"Return ONLY valid JSON\..*?(?=\n|\Z)", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+                cleaned = cleaned.replace("{text}", "{context}")
+                cleaned = cleaned.replace("\nDocument text:\n{context}", "").strip()
+                
+                # Keep prompt snippet compact (max 1200 chars per prompt file)
+                if len(cleaned) > 1200:
+                    cleaned = cleaned[:1150] + "\n..."
+                
+                doc_name_label = dt.upper() if dt else ag.replace("_", " ").upper()
+                label = f"### Domain Guidelines for {doc_name_label} ({prompt_path.split('/')[-1]})"
+                loaded_prompts.append(f"{label}\n{cleaned}")
+                loaded_paths.append(prompt_path)
+
+        merged_prompt = "\n\n".join(loaded_prompts)
+        return merged_prompt, loaded_paths
 
     def _fetch_raw_text(self, document_ids: list, organization_id: str,
                         max_chars: int = 28000, titles: list = None) -> str:
@@ -952,11 +1059,10 @@ class ChatService:
             context = "\n\n".join(context_parts)
             context_len = len(context)
 
-            # Truncate context to stay within Groq free-tier input limits (12K
-            # TPM).  Context + qa_prompt (~1.5K tokens) + system (~80) + question
-            # + history must stay under 12K tokens.  For Urdu-dense text, 16K
-            # chars ≈ 5K tokens, leaving safe margin. 28K chars ~ 8.8K tokens.
-            MAX_CONTEXT_CHARS = 28000
+            # Truncate context to stay well within Groq free-tier input limits (12K TPM).
+            # Context (14K chars ~ 3.5K tokens) + system prompt (~1K tokens) + history (~1.5K tokens)
+            # stays safely under 6K tokens per request.
+            MAX_CONTEXT_CHARS = 14000
             if len(context) > MAX_CONTEXT_CHARS:
                 kept_parts, kept_sources = [], []
                 total = 0
@@ -983,18 +1089,19 @@ class ChatService:
                     resolved_set = set(resolved_ids)
                     resumes = [r for r in resumes if r["id"] in resolved_set]
                 document_service._batch_attach_extractions(resumes, organization_id)
-                resumes = [r for r in resumes if r.get("cv_score") is not None]
+                resumes = [r for r in resumes if r.get("cv_score") is not None or r.get("document_type") == "resume"]
                 resumes.sort(key=lambda x: x.get("cv_score", 0) or 0, reverse=True)
             except Exception:
                 resumes = []
             if resumes:
-                lines = ["[Resume Rankings (sorted by CV evaluation score)]"]
-                for i, r in enumerate(resumes[:20], 1):
-                    score_str = f"{r['cv_score']}/100" if r["cv_score"] is not None else "N/A"
-                    lines.append(f"{i}. {r['title']} — {score_str}")
+                lines = ["[Resume Rankings (STRICTLY SORTED BY CV SCORE - HIGHEST SCORE FIRST)]"]
+                for i, r in enumerate(resumes[:25], 1):
+                    sc = r.get("cv_score")
+                    score_str = f"{sc:.1f}/100" if isinstance(sc, (int, float)) else (f"{sc}/100" if sc is not None else "N/A")
+                    lines.append(f"{i}. Candidate/Resume: {r['title']} — CV Score: {score_str}")
                 resume_block = "\n".join(lines)
                 context = resume_block + "\n\n" + context if context else resume_block
-                chat_log.info(f"Injected {len(resumes)} resume scores into context")
+                chat_log.info(f"Injected {len(resumes)} sorted resume scores into context")
                 # Also inject rich resume details (skills, experience, education, certs)
                 res_doc_ids = [r["id"] for r in resumes if r.get("id")]
                 res_details = self._fetch_resume_details(res_doc_ids, organization_id)
@@ -1013,13 +1120,18 @@ class ChatService:
             if extraction_summary:
                 context = extraction_summary + "\n\n" + context if context else extraction_summary
                 chat_log.info(f"Injected structured extraction summary for {len(extraction_doc_ids)} documents")
-            # Also inject raw source text for table/finance data — critical for Excel docs
-            # where chunks may be truncated or IDs mismatch between local/remote DBs.
-            # _fetch_raw_text handles ID fallback via title matching internally.
-            raw_text_block = self._fetch_raw_text(extraction_doc_ids, organization_id)
+
+        # ── Always inject full raw document source text for selected/retrieved docs ──
+        # CRITICAL for Excel spreadsheets, financial tables, and structured docs where vector search
+        # chunks chop or split tables across chunk boundaries. This guarantees the LLM receives
+        # the complete Excel table with 100% maximum accuracy.
+        target_raw_doc_ids = resolved_ids or extraction_doc_ids or list({r["document_id"] for r in search_results if r.get("document_id")})
+        search_titles = list({r.get("document_title", "") for r in (search_results or []) if r.get("document_title")})
+        if target_raw_doc_ids:
+            raw_text_block = self._fetch_raw_text(target_raw_doc_ids, organization_id, max_chars=14000, titles=search_titles)
             if raw_text_block:
                 context = context + "\n\n" + raw_text_block if context else raw_text_block
-                chat_log.info(f"Injected raw text: {len(raw_text_block)} chars")
+                chat_log.info(f"Injected full raw source text: {len(raw_text_block)} chars for {len(target_raw_doc_ids)} docs")
 
         chat_log.search_strategy("Context Building", f"{len(search_results)} chunks → {context_len} chars")
         doc_types_seen = {}
@@ -1029,7 +1141,7 @@ class ChatService:
             doc_types_seen[dt] = doc_types_seen.get(dt, 0) + 1
             p3a = r.get("phase3_agent", "")
             if p3a:
-                prompt_file = f"prompts/phase3/{p3a}.md"
+                _, prompt_file = get_phase3_prompt_for_doc(dt, p3a)
                 agent_prompts_seen[prompt_file] = agent_prompts_seen.get(prompt_file, 0) + 1
         if doc_types_seen:
             chat_log.info(f"Document types: {', '.join(f'{k}={v}' for k, v in doc_types_seen.items())}")
@@ -1044,8 +1156,9 @@ class ChatService:
             doc_type = s.get("document_type") or ""
             chat_log.source_item(i, s["document_title"], doc_type + agent_tag, s["score"])
 
-        # ── Determine dominant agent from selected documents directly ──
+        # ── Determine dominant agent and document_type from selected documents directly ──
         doc_agent_counts = {}
+        doc_type_counts = {}
         if resolved_ids:
             try:
                 doc_result = SupabaseDB.select("documents",
@@ -1056,7 +1169,10 @@ class ChatService:
                 resolved_set = set(resolved_ids)
                 for d in doc_data:
                     if d.get("id") in resolved_set:
-                        p3a = d.get("phase3_agent") or DOCUMENT_TO_PHASE3_AGENT.get(d.get("document_type", ""), "other_agent")
+                        dt = d.get("document_type", "")
+                        if dt:
+                            doc_type_counts[dt] = doc_type_counts.get(dt, 0) + 1
+                        p3a = d.get("phase3_agent") or DOCUMENT_TO_PHASE3_AGENT.get(dt, "other_agent")
                         if p3a:
                             doc_agent_counts[p3a] = doc_agent_counts.get(p3a, 0) + 1
             except Exception:
@@ -1064,63 +1180,78 @@ class ChatService:
 
         # Also count from search results as fallback
         agent_counts = {}
+        search_doc_type_counts = {}
         for r in search_results:
-            p3a = r.get("phase3_agent") or DOCUMENT_TO_PHASE3_AGENT.get(r.get("document_type", ""), "other_agent")
+            dt = r.get("document_type", "")
+            if dt:
+                search_doc_type_counts[dt] = search_doc_type_counts.get(dt, 0) + 1
+            p3a = r.get("phase3_agent") or DOCUMENT_TO_PHASE3_AGENT.get(dt, "other_agent")
             agent_counts[p3a] = agent_counts.get(p3a, 0) + 1
 
         # Use selected-doc agents if available, otherwise fall back to search result agents
         dominant_source = doc_agent_counts if doc_agent_counts else agent_counts
         dominant_agent = max(dominant_source, key=dominant_source.get) if dominant_source else "other_agent"
 
-        # ── Smart agent when no document is explicitly selected ──
-        # Avoid forcing the majority agent (e.g. hr_agent for resumes) onto a question
-        # about invoices/RFQs. Detect intent from the query; fall back to a generic
-        # Q&A agent when intent is unclear so the LLM answers from whatever doc has it.
-        no_scope = not resolved_ids and not document_type and not phase3_agent
-        if no_scope:
-            detected = self._detect_query_agent(question)
-            dominant_agent = detected if detected else "other_agent"
+        dominant_dt_source = doc_type_counts if doc_type_counts else search_doc_type_counts
+        dominant_doc_type = max(dominant_dt_source, key=dominant_dt_source.get) if dominant_dt_source else (document_type or "")
 
-        # Load the full agent .md prompt and adapt it for Q&A
+        # ── LLM & Keyword Intent Classification when NO file is explicitly selected ──
+        no_scope = not resolved_ids and not document_type and not phase3_agent
+        is_folder_selection = bool(phase3_agent and not resolved_ids and not document_type)
+        target_doc_type = "" if is_folder_selection else dominant_doc_type
+
         qa_prompt = ""
         try:
-            if is_finance_query or dominant_agent == "finance_agent":
-                qa_prompt = (
-                    "You are the Finance Agent for Visibility Docs AI, answering questions about invoices and other financial documents.\n\n"
-                    "Always respond in the same language as the user's question. Use ONLY the provided context. "
-                    "When a structured extraction summary is present, prefer it — it contains exact extracted values.\n\n"
-                    "Answer in detail: include exact invoice numbers, dates, vendor and customer names, subtotal, tax, total, "
-                    "due date, payment terms, and line items with quantities and prices. Keep currency symbols and units intact. "
-                    "If the answer is not in the context, say so. If line items are present, list them cleanly. "
-                    "When structured data and raw text disagree, mention it briefly. Do not invent values.\n"
-                )
-            else:
-                raw_prompt = _load_phase3_prompt(f"{dominant_agent}.md")
+            if no_scope:
+                # 1. Classify user prompt intent via keyword/intent detector
+                query_doc_type = self.detect_doc_type_keyword(question)
+                matched_counts = dict(search_doc_type_counts)
+                if query_doc_type:
+                    # Give highest priority (+100 weight) to doc_type explicitly mentioned in user query
+                    matched_counts[query_doc_type] = matched_counts.get(query_doc_type, 0) + 100
+                    chat_log.info(f"Query intent classified as doc_type: '{query_doc_type}'")
+
+                matched_agents = set(agent_counts.keys())
+                detected_agent = self._detect_query_agent(question)
+                if detected_agent:
+                    matched_agents.add(detected_agent)
+
+                merged_rules, loaded_paths = self._build_multi_prompt_for_search_results(matched_counts, matched_agents)
+                if merged_rules:
+                    chat_log.info(f"Dynamically loaded intent-matched .md prompt file(s) ({len(loaded_paths)} files): {', '.join(loaded_paths)}")
+                    qa_prompt = merged_rules
+
+            if not qa_prompt:
+                # Single document or folder selection: load target .md prompt file
+                raw_prompt, prompt_path = get_phase3_prompt_for_doc(target_doc_type, dominant_agent)
                 if raw_prompt:
                     import re
-                    qa_prompt = raw_prompt.replace("{text}", "{context}")
-                    # Remove extraction-specific JSON instructions, keep Document text line
-                    qa_prompt = re.sub(
-                        r"Return ONLY valid JSON\..*?(?=\nDocument text:)",
-                        "Answer the user's question based ONLY on the provided document context below.",
-                        qa_prompt,
-                        flags=re.DOTALL,
-                    )
-                    # Remove the now-unnecessary "Document text:" line
-                    qa_prompt = qa_prompt.replace("\nDocument text:\n{context}", "")
-                    qa_prompt += (
-                        "\n\nAnswer naturally in the same language as the user's question. "
-                        "Base your reply on the provided context — include relevant skills, experience, "
-                        "qualifications, and supporting evidence. If the context contains image descriptions, "
-                        "use them. If the answer is not in the context, say so. "
-                        "If there are tables or diagrams, explain what they show. "
-                        "Do not make up information.\n"
-                    )
-                    resume_rank_instruction = (
-                        "\nThe context may include a [Resume Rankings] block with CV evaluation scores. "
-                        "Use those scores to rank, compare, or recommend candidates when asked.\n"
-                    ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
-                    qa_prompt += resume_rank_instruction
+                    chat_log.info(f"Loaded prompt file: {prompt_path} (folder_selection={is_folder_selection}, doc_type='{target_doc_type}', agent='{dominant_agent}')")
+                    cleaned_prompt = re.sub(r"##\s*(?:Field Extraction Example|Extraction Example|Field Specifications).*?(?=\n##|\Z)", "", raw_prompt, flags=re.DOTALL | re.IGNORECASE)
+                    cleaned_prompt = re.sub(r"Return ONLY valid JSON\..*?(?=\n|\Z)", "", cleaned_prompt, flags=re.DOTALL | re.IGNORECASE)
+                    cleaned_prompt = cleaned_prompt.replace("{text}", "{context}")
+                    cleaned_prompt = cleaned_prompt.replace("\nDocument text:\n{context}", "")
+                    qa_prompt = cleaned_prompt
+
+            if qa_prompt:
+                qa_prompt = qa_prompt + (
+                    "\n\nSTRICT FACTUAL GROUNDING DIRECTIVE:\n"
+                    "Base your answer ONLY on the explicit facts, text, and numbers provided in the document context below. "
+                    "Do NOT extrapolate, hallucinate, or add external facts not present in the files. "
+                    "If the requested detail is not found in the documents, explicitly state that it is not present.\n\n"
+                    "Provide a comprehensive, in-depth, and highly detailed answer in the same language as the user's question. "
+                    "Explain all relevant points, figures, dates, names, obligations, clauses, findings, and procedural steps thoroughly. "
+                    "Organize your response clearly using headers, key sections, and bullet points. "
+                    "Cite specific document names for every key piece of information.\n"
+                )
+                resume_rank_instruction = (
+                    "\n\nRESUME RANKING & CV SCORE INSTRUCTIONS:\n"
+                    "When answering questions about resumes, candidates, or CVs:\n"
+                    "1. ALWAYS display each candidate's name together with their exact CV Evaluation Score (e.g. 'John Smith — CV Score: 88.5/100').\n"
+                    "2. ALWAYS present the candidates in STRICTLY SORTED order from HIGHEST score to LOWEST score (Rank #1 = highest score).\n"
+                    "3. Format the candidates in a clean Markdown Table or numbered list showing Rank, Candidate Name, CV Score (/100), and Key Qualification/Skills.\n"
+                ) if is_resume_query else ""
+                qa_prompt += resume_rank_instruction
         except Exception:
             pass
 
@@ -1130,33 +1261,37 @@ class ChatService:
             if is_finance_query or dominant_agent == "finance_agent":
                 qa_prompt = (
                     "You are a Finance Agent for Visibility Docs AI.\n\n"
-                    "Answer only from the provided context and structured summary. "
-                    "Be exact about amounts, dates, and names. "
-                    "Keep currency symbols and percentages intact. "
-                    "If the answer is missing, say so. "
-                    "Do not invent numbers.\n"
+                    "Provide a detailed, exact, and thorough financial response based only on the provided context and structured summary. "
+                    "Be exact about amounts, dates, vendor/customer names, invoice numbers, tax rates, subtotals, and totals. "
+                    "Keep currency symbols and units intact. Do not summarize briefly — list all line items and details clearly.\n"
                 )
             else:
                 resume_rank_instruction = (
-                    "\nThe context may include a [Resume Rankings] block with CV evaluation scores. "
-                    "Use those scores to rank, compare, or recommend candidates when asked.\n"
-                ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
+                    "\n\nRESUME RANKING & CV SCORE INSTRUCTIONS:\n"
+                    "When answering questions about resumes, candidates, or CVs:\n"
+                    "1. ALWAYS display each candidate's name together with their exact CV Evaluation Score (e.g. 'John Smith — CV Score: 88.5/100').\n"
+                    "2. ALWAYS present the candidates in STRICTLY SORTED order from HIGHEST score to LOWEST score (Rank #1 = highest score).\n"
+                    "3. Format the candidates in a clean Markdown Table or numbered list showing Rank, Candidate Name, CV Score (/100), and Key Qualification/Skills.\n"
+                ) if is_resume_query else ""
                 qa_prompt = (
                     f"You are the {agent_label} - a document Q&A assistant for Visibility Docs AI.\n\n"
-                    "Answer naturally in the same language as the user's question. "
-                    "Base your reply on the provided context — include relevant details, "
-                    "evidence, and supporting information. If the context contains image "
-                    "descriptions, use them. If the answer is not in the context, say so. "
-                    "If there are tables or diagrams, explain what they show. "
-                    "Do not make up information.\n"
+                    "Provide a comprehensive, in-depth, and highly detailed answer in the same language as the user's question. "
+                    "Do NOT give brief or short summaries. Explain all relevant details, numbers, dates, evidence, and supporting information "
+                    "from the provided context. Structure your answer cleanly using headings and bullet points.\n"
                     f"{resume_rank_instruction}"
                 )
-        # ── Common instructions: source citation + counter questions ──
+        # ── Common instructions: source citation + NO-JSON directive ──
         qa_prompt += (
             "\nWhen you share extracted values or information, always mention which "
             "document it came from — use the document name shown in the context naturally, "
             "like \"Invoice-001 shows...\" or \"the resume of John contains...\". "
             "Do not list values without saying which file they belong to."
+        )
+        qa_prompt += (
+            "\n\nCRITICAL FORMATTING INSTRUCTION: Do NOT output raw JSON objects, JSON code blocks, "
+            "or _field_confidence metadata in your response. Under no circumstances should you return "
+            "a raw JSON code block like ```json { ... } ```. Always write clean, professional, human-readable "
+            "natural language using Markdown headings, text, bullet points, and formatted Markdown tables."
         )
         # ── Clarifying counter-questions (ChatGPT-style) ──
         # Ask a natural follow-up whenever something is genuinely unclear: the
@@ -1180,6 +1315,7 @@ class ChatService:
         is_followup = not is_first
         answer = conversation_service.chat(question, context, session_id=sid, is_followup=is_followup,
                                             system_prompt=qa_prompt)
+        answer = self._clean_json_response_to_text(answer)
         chat_log.llm_response(time.time() - llm_t0, len(answer))
 
         history = conversation_service.get_history(sid)
@@ -1228,6 +1364,7 @@ class ChatService:
             question, excerpt_context, session_id=sid,
             is_followup=not is_first, system_prompt=system_prompt,
         )
+        answer = self._clean_json_response_to_text(answer)
         chat_log.llm_response(time.time() - llm_t0, len(answer))
         self._save_exchange(sid, question, answer, [], is_first)
         history = conversation_service.get_history(sid)

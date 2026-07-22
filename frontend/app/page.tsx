@@ -381,7 +381,14 @@ function FolderTree({ docs, orgId, token, onSelectDoc, selectedDocId, onDeleteDo
                     <div className="px-2 pb-1.5 space-y-0.5">
                       {tree[agent][type]
                         .slice()
-                        .sort((a: any, b: any) => (a.title || "").localeCompare(b.title || ""))
+                        .sort((a: any, b: any) => {
+                          const aScore = a.cv_score != null ? a.cv_score : -1;
+                          const bScore = b.cv_score != null ? b.cv_score : -1;
+                          if (aScore !== -1 || bScore !== -1) {
+                            if (aScore !== bScore) return bScore - aScore;
+                          }
+                          return (a.title || "").localeCompare(b.title || "");
+                        })
                         .map((d: any) => (
                           <div key={d.id} className="flex items-center gap-1 group">
                             <button onClick={() => onSelectDoc?.(d)}
@@ -389,6 +396,15 @@ function FolderTree({ docs, orgId, token, onSelectDoc, selectedDocId, onDeleteDo
                               <span className="flex items-center gap-1.5 min-w-0">
                                 <span className="text-slate-400 group-hover:text-indigo-500 text-xs">📄</span>
                                 <span className="text-xs text-slate-700 truncate">{d.title || d.original_file_url || "Untitled"}</span>
+                                {d.cv_score != null && (
+                                  <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded-md shrink-0 border ${
+                                    d.cv_score >= 70 ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                                    d.cv_score >= 40 ? "bg-amber-50 text-amber-700 border-amber-200" :
+                                    "bg-red-50 text-red-700 border-red-200"
+                                  }`}>
+                                    ⭐ {d.cv_score}/100
+                                  </span>
+                                )}
                               </span>
                               <span className="flex items-center gap-1 shrink-0">
                                 <span className={`badge badge-xs ${statusColor(d.status)}`}>{d.status}</span>
@@ -482,7 +498,14 @@ function ChatFolderTree({ docs, selectedDocs, onToggleDoc, onToggleFolder, searc
                     <div className="px-2 pb-1.5 space-y-0.5">
                       {typeDocs
                         .slice()
-                        .sort((a: any, b: any) => (a.title || "").localeCompare(b.title || ""))
+                        .sort((a: any, b: any) => {
+                          const aScore = a.cv_score != null ? a.cv_score : -1;
+                          const bScore = b.cv_score != null ? b.cv_score : -1;
+                          if (aScore !== -1 || bScore !== -1) {
+                            if (aScore !== bScore) return bScore - aScore;
+                          }
+                          return (a.title || "").localeCompare(b.title || "");
+                        })
                         .map((d: any) => {
                           const sel = selectedIds.has(d.id);
                           return (
@@ -493,7 +516,18 @@ function ChatFolderTree({ docs, selectedDocs, onToggleDoc, onToggleFolder, searc
                                 onChange={() => onToggleDoc(d.id)}
                                 className="checkbox checkbox-xs rounded border-slate-300 [--chkbg:#6366f1] shrink-0" />
                               <label onClick={() => onToggleDoc(d.id)}
-                                className="text-xs text-slate-700 truncate flex-1 cursor-pointer">{d.title || d.original_file_url || "Untitled"}</label>
+                                className="text-xs text-slate-700 truncate flex-1 cursor-pointer flex items-center gap-1.5 min-w-0">
+                                <span className="truncate">{d.title || d.original_file_url || "Untitled"}</span>
+                                {d.cv_score != null && (
+                                  <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded-md shrink-0 border ${
+                                    d.cv_score >= 70 ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                                    d.cv_score >= 40 ? "bg-amber-50 text-amber-700 border-amber-200" :
+                                    "bg-red-50 text-red-700 border-red-200"
+                                  }`}>
+                                    ⭐ {d.cv_score}/100
+                                  </span>
+                                )}
+                              </label>
                               <a href={`${API}/api/v1/documents/${d.id}/file?organization_id=${orgId}`} target="_blank"
                                 className="text-slate-300 hover:text-indigo-500 shrink-0 transition-colors" title="Open file">
                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1299,7 +1333,12 @@ function ChatSection({ showToast, selectedDocs, setSelectedDocs, orgId, token, a
             {selectedDocs.map((d: any) => (
               <span key={d.id}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-indigo-200 text-xs font-medium text-indigo-700 shadow-sm whitespace-nowrap shrink-0">
-                {d.title || d.id.slice(0, 8)}
+                <span className="truncate max-w-[180px]">{d.title || d.id.slice(0, 8)}</span>
+                {d.cv_score != null && (
+                  <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-emerald-100 text-emerald-800 border border-emerald-200 shrink-0">
+                    ⭐ {d.cv_score}/100
+                  </span>
+                )}
                 <button onClick={() => {
                   setSelectedDocs((prev: any[]) => prev.filter((x: any) => x.id !== d.id));
                 }} className="hover:text-red-500 transition-colors">

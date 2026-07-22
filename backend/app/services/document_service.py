@@ -93,9 +93,12 @@ class DocumentService:
                 else:
                     parsed = raw or {}
                 ev = parsed.get("cv_evaluation") or {}
-                score = ev.get("overall_score")
+                score = ev.get("overall_score") if ev.get("overall_score") is not None else parsed.get("cv_score")
                 if score is not None:
-                    doc["cv_score"] = float(score)
+                    try:
+                        doc["cv_score"] = float(score)
+                    except (ValueError, TypeError):
+                        pass
                 if full_data and ev:
                     doc["cv_extraction_data"] = ev
         except Exception:
@@ -140,9 +143,12 @@ class DocumentService:
                 else:
                     parsed = raw or {}
                 ev = parsed.get("cv_evaluation") or {}
-                score = ev.get("overall_score")
+                score = ev.get("overall_score") if ev.get("overall_score") is not None else parsed.get("cv_score")
                 if score is not None:
-                    scores[row["document_id"]] = float(score)
+                    try:
+                        scores[row["document_id"]] = float(score)
+                    except (ValueError, TypeError):
+                        pass
             for d in docs:
                 if d["id"] in scores:
                     d["cv_score"] = scores[d["id"]]

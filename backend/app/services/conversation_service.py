@@ -18,10 +18,13 @@ SYSTEM_PROMPT = (
 )
 
 AGENT_SYSTEM_PROMPT = (
-    "You are a helpful document analysis assistant. "
-    "Follow the Agent Instructions carefully. "
-    "Answer in the same language as the user's question. "
-    "Be thorough and extract all relevant information from the context."
+    "You are a strict, factual document analysis assistant for Visibility Docs AI. "
+    "STRICT GROUNDING DIRECTIVE: Base every fact, date, number, name, and figure ONLY on the provided document context. "
+    "Do NOT assume, infer, or hallucinate outside knowledge or information not explicitly present in the files. "
+    "If information is missing or not found in the context, explicitly state that it is not available in the documents. "
+    "Answer naturally in the same language as the user's question. "
+    "Be thorough, detailed, and extract all relevant information from the context. "
+    "CRITICAL: Do NOT output raw JSON objects, JSON code blocks, or _field_confidence dictionaries — always write human-readable Markdown responses."
 )
 
 
@@ -37,8 +40,8 @@ class ConversationService:
         self.llm = ChatGroq(
             api_key=api_key,
             model="llama-3.3-70b-versatile",
-            temperature=0.1,
-            max_tokens=2048,
+            temperature=0.0,
+            max_tokens=3072,
         ) if api_key and api_key != "gsk_your_groq_api_key" else None
         self._chain = None
         self._chain_with_history = None
@@ -53,18 +56,14 @@ class ConversationService:
             return
 
         sp = system_prompt or SYSTEM_PROMPT
-        if sp == SYSTEM_PROMPT or "{" not in sp:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", sp),
-                MessagesPlaceholder(variable_name="history"),
-                ("human", "{agent_instructions}Document Context:\n{context}\n\nQuestion: {question}"),
-            ])
-        else:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", AGENT_SYSTEM_PROMPT),
-                MessagesPlaceholder(variable_name="history"),
-                ("human", "{agent_instructions}Document Context:\n{context}\n\nQuestion: {question}"),
-            ])
+        # Escape any remaining single braces so LangChain template variables aren't confused
+        clean_sp = sp.replace("{", "{{").replace("}", "}}") if "{" in sp else sp
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", clean_sp),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "Document Context:\n{context}\n\nQuestion: {question}"),
+        ])
 
         self._chain = prompt | self.llm
 
@@ -118,20 +117,15 @@ class ConversationService:
         config = {"configurable": {"session_id": session_id or "default"}} if session_id else \
                  {"configurable": {"session_id": "default"}}
 
-        # Build chain inputs based on whether we have agent instructions
-        chain_inputs = {"question": question}
-
         if system_prompt:
             changed = self.update_system_prompt(system_prompt)
             if changed:
                 chat_log.info(f"System prompt updated to agent-specific prompt ({len(system_prompt)} chars)")
 
-        if system_prompt and "{" in system_prompt:
-            # Agent prompt has {text}/{filename} — pass as agent_instructions instead
-            chain_inputs["agent_instructions"] = "Agent Instructions:\n" + system_prompt + "\n\n"
-        else:
-            chain_inputs["agent_instructions"] = ""
-        chain_inputs["context"] = context
+        chain_inputs = {
+            "question": question,
+            "context": context,
+        }
 
         if is_followup and not context:
             context = self.get_last_context(session_id)
@@ -142,8 +136,6 @@ class ConversationService:
             self.set_last_context(session_id, context)
 
         # ── Inject last assistant response for conversational continuity ──
-        # Make the previous answer visible in the primary context (not just
-        # the `history` placeholder) so the model always attends to it.
         if context:
             try:
                 h = get_session_history(session_id or "default")
@@ -151,18 +143,16 @@ class ConversationService:
                     if isinstance(m, AIMessage):
                         txt = m.content.strip()
                         if txt and txt not in context:
-                            context += f"\n--\n[Previous Response]\n{txt}\n[/Previous Response]"
+                            context += f"\n--\n[Previous Response]\n{txt[:500]}\n[/Previous Response]"
                         break
             except Exception:
                 pass
 
-        # ── Trim history to stay within Groq free-tier TPM limits ──
-        # The full history is sent on every turn; without trimming it grows
-        # unbounded and eventually triggers a 413 "Request too large" error.
+        # ── Trim history to stay within Groq free-tier TPM limits (12K TPM max) ──
         try:
             hist = get_session_history(session_id or "default")
-            if hist is not None and len(hist.messages) > 16:
-                kept = hist.messages[-16:]
+            if hist is not None and len(hist.messages) > 6:
+                kept = hist.messages[-6:]
                 hist.clear()
                 for m in kept:
                     hist.add_message(m)
