@@ -118,7 +118,7 @@ class OrchestrationLogger:
     def end(self, status: str = "processed"):
         total = time.time() - self.start_time
         print()
-        if status in ("processed", "completed"):
+        if status in ("processed", "completed", "classified"):
             badge = f"{C.GREEN_BG}{C.BLACK} [OK] {C.RESET}"
             color = C.GREEN
         else:

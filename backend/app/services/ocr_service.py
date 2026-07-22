@@ -8,8 +8,28 @@ from enum import Enum
 import fitz
 from PIL import Image
 from ..config import settings
+from .preprocessing_service import preprocessing_service
+
+try:
+    import pytesseract
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    TESSERACT_AVAILABLE = False
 
 logger = logging.getLogger("visibility-docs")
+
+
+def _preprocess_image(img: Image.Image) -> Image.Image:
+    try:
+        img = preprocessing_service.deskew(img)
+        if img.mode == "RGB":
+            img = preprocessing_service.denoise(img)
+        img = preprocessing_service.enhance_contrast(img)
+        logger.info("Image preprocessing applied")
+        return img
+    except Exception as e:
+        logger.warning(f"Image preprocessing failed: {e}")
+        return img
 
 
 class FileType(str, Enum):
@@ -38,7 +58,7 @@ def detect_file_type(file_path: str) -> FileType:
         return FileType.XLSX
     if ext == ".pptx":
         return FileType.PPTX
-    if ext == ".txt":
+    if ext in [".txt", ".csv"]:
         return FileType.TXT
     if _is_image_ext(ext):
         return FileType.IMAGE
@@ -195,6 +215,7 @@ def _extract_pptx(file_path: str) -> str:
 def _page_to_image(page) -> str:
     pix = page.get_pixmap(dpi=150)
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    img = _preprocess_image(img)
     target_w = 768
     w_percent = target_w / float(img.width)
     h_size = int(float(img.height) * float(w_percent))
@@ -209,6 +230,7 @@ def _load_image_b64(file_path: str) -> str:
     img = Image.open(file_path)
     if img.mode != "RGB":
         img = img.convert("RGB")
+    img = _preprocess_image(img)
     w_percent = target_w / float(img.width)
     h_size = int(float(img.height) * float(w_percent))
     img = img.resize((target_w, h_size), Image.LANCZOS)
@@ -260,6 +282,22 @@ def _vision_ocr(image_b64s: list[str]) -> str:
     return "\n\n".join(texts)
 
 
+def _tesseract_ocr_image(img: Image.Image) -> str:
+    if not TESSERACT_AVAILABLE:
+        return ""
+    try:
+        return pytesseract.image_to_string(img, lang='eng')
+    except Exception as e:
+        logger.warning(f"Tesseract OCR failed: {e}")
+        return ""
+
+
+def _tesseract_ocr_b64(b64_str: str) -> str:
+    img_data = base64.b64decode(b64_str)
+    img = Image.open(io.BytesIO(img_data))
+    return _tesseract_ocr_image(img)
+
+
 def process_scanned_pdf(file_path: str) -> str:
     doc = fitz.open(file_path)
     b64s = []
@@ -274,6 +312,17 @@ def process_scanned_pdf(file_path: str) -> str:
     if text.strip():
         text = _normalize_markdown(text)
         return text
+
+    if not text.strip() and TESSERACT_AVAILABLE:
+        logger.info("Vision empty, trying Tesseract fallback")
+        tess_parts = []
+        for b64 in b64s:
+            t = _tesseract_ocr_b64(b64)
+            if t.strip():
+                tess_parts.append(t)
+        tess_text = "\n\n".join(tess_parts)
+        if tess_text.strip():
+            return _normalize_markdown(tess_text)
 
     logger.warning("Vision returned empty for scanned PDF, trying PyMuPDF fallback")
     try:
@@ -295,6 +344,14 @@ def process_image(file_path: str) -> str:
     text = _vision_ocr([b64])
     if text.strip():
         return _normalize_markdown(text)
+    
+    if not text.strip() and TESSERACT_AVAILABLE:
+        logger.info("Vision empty for image, trying Tesseract fallback")
+        img = Image.open(file_path)
+        text = _tesseract_ocr_image(img)
+        if text.strip():
+            return _normalize_markdown(text)
+
     return "[OCR failed]"
 
 

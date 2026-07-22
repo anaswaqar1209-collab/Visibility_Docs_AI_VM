@@ -10,7 +10,7 @@ KEY_FIELDS_MAP = {
     "financial_statement": ["document_title", "document_number", "vendor_name", "total_amount", "currency", "accounting_codes", "notes"],
     "purchase_order": ["document_title", "po_number", "vendor_name", "buyer_name", "order_date", "delivery_date", "currency", "total_amount", "incoterms", "payment_terms", "shipping_terms", "requested_by", "approved_by", "approval_status", "notes"],
     "quotation": ["document_title", "quote_number", "vendor_name", "buyer_name", "order_date", "delivery_date", "currency", "total_amount", "incoterms", "payment_terms", "notes"],
-    "contract": ["document_title", "party_a", "party_b", "contract_number", "effective_date", "expiry_date", "renewal_terms", "payment_terms", "governing_law", "jurisdiction", "signature_required", "obligations", "clauses", "termination_notice", "risk_flags", "notes"],
+    "contract": ["document_title", "party_a", "party_b", "parties", "contract_number", "effective_date", "expiry_date", "renewal_terms", "payment_terms", "financial_terms", "governing_law", "jurisdiction", "clauses", "obligations", "signature_required", "signatures", "termination_notice", "risk_flags", "notes", "source_grounding"],
     "hr_document": ["document_title", "employee_name", "employee_id", "department", "designation", "manager_name", "issue_date", "effective_date", "end_date", "salary", "leave_type", "leave_duration", "policy_name", "training_name", "appraisal_period", "status", "key_terms", "notes"],
     "resume": ["document_title", "employee_name", "designation", "department", "key_terms", "notes"],
     "transcript": ["document_title", "employee_name", "training_name", "issue_date", "status", "notes"],

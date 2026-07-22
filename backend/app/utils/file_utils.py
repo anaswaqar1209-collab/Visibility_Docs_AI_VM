@@ -1,13 +1,14 @@
 import uuid
 import hashlib
 import re
+import asyncio
 from pathlib import Path
 from fastapi import UploadFile
 from ..config import settings
 from ..database import SupabaseDB
 from ..services.hf_storage import hf_storage
 
-ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp", ".docx", ".xlsx", ".pptx", ".txt"}
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp", ".docx", ".xlsx", ".pptx", ".txt", ".csv"}
 MAX_FILE_SIZE = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 
@@ -46,8 +47,14 @@ async def save_upload_file(upload_file: UploadFile, organization_id: str = "") -
     # Upload to Supabase storage
     supabase_url = ""
     try:
-        SupabaseDB.upload_file("documents", remote_path, file_data, upload_file.content_type)
-        supabase_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/documents/{remote_path}"
+        await asyncio.to_thread(
+            SupabaseDB.upload_file,
+            settings.STORAGE_BUCKET,
+            remote_path,
+            file_data,
+            upload_file.content_type
+        )
+        supabase_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/{settings.STORAGE_BUCKET}/{remote_path}"
     except Exception:
         pass
 
