@@ -8,6 +8,46 @@ logger = logging.getLogger("visibility-docs")
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts")
 
 
+def _sanitize_json_string(raw: str) -> str:
+    """Clean common LLM JSON output issues before parsing."""
+    import re
+    # Remove markdown code fences
+    raw = re.sub(r'^```(?:json)?\s*', '', raw.strip())
+    raw = re.sub(r'\s*```$', '', raw.strip())
+    # Remove trailing commas before } or ]
+    raw = re.sub(r',\s*([}\]])', r'\1', raw)
+    return raw.strip()
+
+
+def _validate_extraction_json(result: dict, doc_type: str) -> dict:
+    """Validate and clean the extraction JSON output from LLM."""
+    if not isinstance(result, dict):
+        logger.warning(f"Extraction result is not a dict: {type(result)}")
+        return {"_validation": "failed", "_error": "Result is not a valid JSON object", "raw": str(result)}
+    
+    # Add validation metadata
+    validated = dict(result)
+    
+    # Check for empty extractions
+    non_meta_keys = [k for k in validated.keys() if not k.startswith('_')]
+    empty_count = sum(1 for k in non_meta_keys if validated[k] is None or validated[k] == "" or validated[k] == [])
+    total_count = len(non_meta_keys) if non_meta_keys else 1
+    
+    completeness = round((total_count - empty_count) / total_count * 100, 1)
+    
+    validated["_validation"] = "passed"
+    validated["_completeness_pct"] = completeness
+    validated["_extracted_fields"] = total_count
+    validated["_empty_fields"] = empty_count
+    
+    if completeness < 20:
+        validated["_validation"] = "warning"
+        validated["_warning"] = f"Low extraction completeness: {completeness}% — LLM may have failed to extract data"
+        logger.warning(f"Low extraction completeness for {doc_type}: {completeness}%")
+    
+    return validated
+
+
 def _load_prompt(filename: str) -> str:
     path = os.path.join(PROMPTS_DIR, filename)
     if os.path.exists(path):
@@ -26,29 +66,79 @@ def _load_phase3_prompt(filename: str) -> str:
 
 
 PHASE3_AGENT_PROMPT_MAP = {
+    # ── Base Agents (fallback / generic) ──
     "finance_agent": os.path.join("phase3", "finance_agent.md"),
     "procurement_agent": os.path.join("phase3", "procurement_agent.md"),
     "hr_agent": os.path.join("phase3", "hr_agent.md"),
     "legal_agent": os.path.join("phase3", "legal_agent.md"),
     "compliance_agent": os.path.join("phase3", "compliance_agent.md"),
     "other_agent": os.path.join("phase3", "other.md"),
+
+    # ── Finance Skills ──
+    "invoice_search_agent": os.path.join("phase3", "finance", "invoice_search.md"),
+    "duplicate_invoice_detection_agent": os.path.join("phase3", "finance", "duplicate_invoice_detection.md"),
+    "payment_term_extraction_agent": os.path.join("phase3", "finance", "payment_term_extraction.md"),
+    "expense_summary_agent": os.path.join("phase3", "finance", "expense_summary.md"),
+
+    # ── Procurement Skills ──
+    "quotation_comparison_agent": os.path.join("phase3", "procurement", "quotation_comparison.md"),
+    "po_and_invoice_validation_agent": os.path.join("phase3", "procurement", "po_and_invoice_validation.md"),
+    "supplier_document_search_agent": os.path.join("phase3", "procurement", "supplier_document_search.md"),
+
+    # ── Compliance Skills ──
+    "audit_evidence_collection_agent": os.path.join("phase3", "compliance", "audit_evidence_collection.md"),
+    "missing_document_detection_agent": os.path.join("phase3", "compliance", "missing_document_detection.md"),
+    "expired_certificate_tracking_agent": os.path.join("phase3", "compliance", "expired_certificate_tracking.md"),
+
+    # ── HR Skills ──
+    "employee_doc_completeness_agent": os.path.join("phase3", "hr", "employee_document_completeness.md"),
+    "certificate_expiry_tracking_agent": os.path.join("phase3", "hr", "certificate_expiry_tracking.md"),
+    "contract_search_agent": os.path.join("phase3", "hr", "contract_search.md"),
+
+    # ── Legal Skills ──
+    "contract_summary_agent": os.path.join("phase3", "legal", "contract_summary.md"),
+    "clause_extraction_agent": os.path.join("phase3", "legal", "clause_extraction.md"),
+    "risk_detection_agent": os.path.join("phase3", "legal", "risk_detection.md"),
+    "version_comparison_agent": os.path.join("phase3", "legal", "version_comparison.md"),
 }
 
 DOCUMENT_TO_PHASE3_AGENT = {
-    "invoice": "finance_agent",
-    "financial_statement": "finance_agent",
-    "purchase_order": "procurement_agent",
-    "quotation": "procurement_agent",
+    # ── Finance ──
+    "invoice": "invoice_search_agent",
+    "financial_statement": "expense_summary_agent",
+    "duplicate_invoice": "duplicate_invoice_detection_agent",
+    "payment_terms": "payment_term_extraction_agent",
+    "expense_report": "expense_summary_agent",
+
+    # ── Procurement ──
+    "purchase_order": "po_and_invoice_validation_agent",
+    "quotation": "quotation_comparison_agent",
+    "supplier_agreement": "supplier_document_search_agent",
+
+    # ── Legal ──
     "contract": "legal_agent",
-    "hr_document": "hr_agent",
-    "certificate": "compliance_agent",
-    "audit_report": "compliance_agent",
+    "contract_summary": "contract_summary_agent",
+    "clause_extraction": "clause_extraction_agent",
+    "risk_detection": "risk_detection_agent",
+    "version_comparison": "version_comparison_agent",
+
+    # ── HR ──
+    "hr_document": "employee_doc_completeness_agent",
+    "resume": "hr_agent",
+    "transcript": "hr_agent",
+    "employee_certificate": "certificate_expiry_tracking_agent",
+    "employment_contract": "contract_search_agent",
+
+    # ── Compliance ──
+    "certificate": "expired_certificate_tracking_agent",
+    "audit_report": "audit_evidence_collection_agent",
     "quality_report": "compliance_agent",
     "maintenance_report": "compliance_agent",
     "sop": "compliance_agent",
     "engineering_drawing": "compliance_agent",
-    "resume": "hr_agent",
-    "transcript": "hr_agent",
+    "missing_document": "missing_document_detection_agent",
+
+    # ── Fallback ──
     "other": "other_agent",
 }
 
@@ -117,6 +207,38 @@ HEURISTIC_RULES = [
             "indemnity", "confidentiality", "lease agreement",
             "service agreement", "binding", "executed",
             "معاہدہ", "کنٹریکٹ", "دستخط", "شرائط", "قانون",
+        ],
+    ),
+    (
+        "legal_agent",
+        "contract_summary",
+        [
+            "contract summary", "executive summary", "key terms",
+            "agreement summary", "summary of terms", "term sheet",
+        ],
+    ),
+    (
+        "legal_agent",
+        "clause_extraction",
+        [
+            "clause extraction", "extract clauses", "find clause",
+            "specific clauses",
+        ],
+    ),
+    (
+        "legal_agent",
+        "risk_detection",
+        [
+            "risk detection", "legal risk", "loopholes", "compliance issue",
+            "red flags", "liability risk",
+        ],
+    ),
+    (
+        "legal_agent",
+        "version_comparison",
+        [
+            "version comparison", "compare versions", "redlines",
+            "redline", "tracked changes", "diff",
         ],
     ),
     (
@@ -255,10 +377,9 @@ class ClassificationAgent:
         try:
             t0 = __import__("time").time()
             log.info("Calling Groq API (llama-8b)...")
-            result = groq_service._parse_json(
-                groq_service.chat([{"role": "user", "content": prompt}], temperature=0.05, max_tokens=2048, model="llama-3.1-8b-instant"),
-                {},
-            )
+            raw_text = groq_service.chat([{"role": "user", "content": prompt}], temperature=0.05, max_tokens=2048, model="llama-3.1-8b-instant")
+            raw_text = _sanitize_json_string(raw_text)
+            result = groq_service._parse_json(raw_text, {})
             duration = __import__("time").time() - t0
             if not result:
                 log.warn(f"LLM returned empty ({duration:.1f}s), falling back to heuristic")
@@ -313,9 +434,11 @@ class CategoryExtractionAgent:
 
         try:
             t0 = __import__("time").time()
-            result = groq_service._parse_json(groq_service.chat(
+            raw_text = groq_service.chat(
                 [{"role": "user", "content": prompt}], temperature=0.05, max_tokens=4096
-            ), {})
+            )
+            raw_text = _sanitize_json_string(raw_text)
+            result = groq_service._parse_json(raw_text, {})
             duration = __import__("time").time() - t0
             field_confidence = result.pop("_field_confidence", {}) if isinstance(result, dict) else {}
             avg_confidence = 0.7
@@ -326,6 +449,9 @@ class CategoryExtractionAgent:
             log.result("Fields", f"{fields[:8]}", C.GREEN)
             log.result("Confidence", f"{avg_confidence:.2f}", C.GREEN)
             log.result("Duration", f"{duration:.1f}s", C.DIM)
+            
+            result = _validate_extraction_json(result, document_type)
+            
             return {
                 "extracted_data": result if isinstance(result, dict) else {},
                 "confidence": avg_confidence,

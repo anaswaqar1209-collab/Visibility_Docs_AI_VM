@@ -30,7 +30,8 @@ class DocumentService:
             "updated_at": now,
         }
 
-        result = SupabaseDB.insert("documents", doc_data)
+        import asyncio
+        result = await asyncio.to_thread(SupabaseDB.insert, "documents", doc_data)
         if hasattr(result, "data") and result.data:
             return result.data[0]
         return doc_data
@@ -176,7 +177,7 @@ class DocumentService:
             if supabase_url:
                 try:
                     filename = supabase_url.rsplit("/", 1)[-1]
-                    SupabaseDB.delete_file("documents", filename)
+                    SupabaseDB.delete_file(settings.STORAGE_BUCKET, filename)
                 except Exception:
                     pass
         SupabaseDB.delete_document_cascade(document_id)

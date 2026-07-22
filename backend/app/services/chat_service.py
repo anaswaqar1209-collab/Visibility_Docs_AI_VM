@@ -964,23 +964,23 @@ class ChatService:
             else:
                 raw_prompt = _load_phase3_prompt(f"{dominant_agent}.md")
                 if raw_prompt:
-                    import re
-                    qa_prompt = raw_prompt.replace("{text}", "{context}")
-                    # Remove extraction-specific JSON instructions, keep Document text line
-                    qa_prompt = re.sub(
-                        r"Return ONLY valid JSON\..*?(?=\nDocument text:)",
-                        "Answer the user's question based ONLY on the provided document context below.",
-                        qa_prompt,
-                        flags=re.DOTALL,
-                    )
-                    # Remove the now-unnecessary "Document text:" line
-                    qa_prompt = qa_prompt.replace("\nDocument text:\n{context}", "")
+                    # Strip out extraction JSON schemas and few-shot examples for Q&A
+                    qa_prompt = raw_prompt
+                    if "## Extraction Guidelines" in qa_prompt:
+                        qa_prompt = qa_prompt.split("## Extraction Guidelines")[0].strip()
+                    elif "## Field Specifications" in qa_prompt:
+                        qa_prompt = qa_prompt.split("## Field Specifications")[0].strip()
+                    else:
+                        qa_prompt = qa_prompt.split("Return ONLY valid JSON")[0].strip()
+
                     qa_prompt += (
-                        "\n\nAnswer naturally in the same language as the user's question. "
-                        "Base your reply on the provided context — include relevant skills, experience, "
-                        "qualifications, and supporting evidence. If the context contains image descriptions, "
-                        "use them. If the answer is not in the context, say so. "
-                        "If there are tables or diagrams, explain what they show. "
+                        "\n\nIMPORTANT: The user has uploaded files. The extracted text and data from these files "
+                        "is provided below in the 'Document Context'. You DO have access to the file contents through this context. "
+                        "Do not tell the user you don't have access to the file.\n\n"
+                        "Answer naturally in the same language as the user's question. "
+                        "Base your reply ONLY on the provided document context below. "
+                        "If the answer is not in the context, say so. "
+                        "If there are tables or diagrams in the context, explain what they show. "
                         "Do not make up information.\n"
                     )
                     resume_rank_instruction = (

@@ -6,8 +6,33 @@ import pdfplumber
 import pandas as pd
 import cv2
 import numpy as np
+from PIL import Image as PILImage
+
+try:
+    import pytesseract
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    TESSERACT_AVAILABLE = False
 
 logger = logging.getLogger("visibility-docs")
+
+
+def _ocr_cell(roi_img) -> str:
+    """OCR a single table cell image crop using Tesseract."""
+    if not TESSERACT_AVAILABLE:
+        # Fallback: check if cell has content
+        mean_val = cv2.mean(roi_img)[0]
+        return "" if mean_val > 240 else "[data]"
+    try:
+        # Convert OpenCV grayscale numpy array to PIL Image
+        pil_img = PILImage.fromarray(roi_img)
+        text = pytesseract.image_to_string(pil_img, config='--psm 6').strip()
+        # Clean up common OCR artifacts
+        text = text.replace('\n', ' ').strip()
+        return text
+    except Exception:
+        mean_val = cv2.mean(roi_img)[0]
+        return "" if mean_val > 240 else "[data]"
 
 
 def _camelot_available() -> bool:
@@ -107,8 +132,7 @@ def _extract_opencv(pdf_path: str) -> list[dict]:
                 text_row = []
                 for cx, cy, cw, ch in row_cells:
                     roi = img[cy : cy + ch, cx : cx + cw]
-                    mean_val = cv2.mean(roi)[0]
-                    text_row.append("" if mean_val > 240 else "[data]")
+                    text_row.append(_ocr_cell(roi))
                 text_rows.append(text_row)
             if len(text_rows) >= 2:
                 md_rows = []

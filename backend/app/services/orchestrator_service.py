@@ -80,9 +80,21 @@ class OrchestratorService:
         if os.path.exists(fp):
             return fp
         if fp.startswith("http"):
-            import tempfile, urllib.request
-            resp = urllib.request.urlopen(fp, timeout=120)
-            data = resp.read()
+            import tempfile, urllib.request, urllib.parse
+            # Safely quote the URL to handle spaces, without double-encoding existing %
+            encoded_fp = urllib.parse.quote(fp, safe=":/?&=#%")
+            req = urllib.request.Request(
+                encoded_fp,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            try:
+                resp = urllib.request.urlopen(req, timeout=120)
+                data = resp.read()
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8", errors="ignore")
+                raise FileNotFoundError(f"Failed to download remote file. HTTP {e.code}: {e.reason} - {err_body}")
+            except urllib.error.URLError as e:
+                raise FileNotFoundError(f"Network error downloading file: {e.reason}")
             ext = os.path.splitext(fp.split("?")[0].split("/")[-1])[1] or ".pdf"
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
             tmp.write(data)

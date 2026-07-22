@@ -26,7 +26,9 @@ def _get_supabase():
             opts = SyncClientOptions(postgrest_client_timeout=30)
             _supabase_client = create_client(url, key, options=opts)
             _use_supabase = True
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger("visibility-docs").error(f"Failed to initialize Supabase client: {e}")
             _supabase_client = None
     return _supabase_client
 
@@ -332,8 +334,12 @@ class SupabaseDB:
             client = _get_supabase()
             if _use_supabase and client:
                 return client.storage.from_(bucket).upload(path, file_data, {"content-type": content_type or "application/octet-stream"})
-        except Exception:
-            pass
+            else:
+                import logging
+                logging.getLogger("visibility-docs").error("upload_file: Supabase client is not initialized")
+        except Exception as e:
+            import logging
+            logging.getLogger("visibility-docs").error(f"upload_file exception: {e}")
         return None
 
     @staticmethod

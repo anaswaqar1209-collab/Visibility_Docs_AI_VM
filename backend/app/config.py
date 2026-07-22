@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     PROCESSED_DIR: str = ""
     MAX_UPLOAD_SIZE_MB: int = 50
 
+    STORAGE_BUCKET: str = "visibility"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

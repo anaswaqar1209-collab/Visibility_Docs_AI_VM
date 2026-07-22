@@ -30,7 +30,7 @@ class ClassifyTextRequest(BaseModel):
     description="Upload PDF, image, DOCX, XLSX, or PPTX file for processing",
 )
 async def upload_document(
-    file: UploadFile = File(..., description="Document file (PDF, images, DOCX, XLSX, PPTX)"),
+    file: UploadFile = File(..., description="Document file (PDF, images, DOCX, XLSX, PPTX, CSV)"),
     organization_id: str = Form(..., description="Tenant organization ID"),
     title: str = Form(None, description="Optional document title"),
 ):
@@ -43,7 +43,7 @@ async def upload_document(
         print(f"[UPLOAD] REJECTED - unsupported type: {file.filename}")
         raise HTTPException(
             status_code=400,
-            detail=f"File type not supported: {file.filename}. Allowed: PDF, JPG, PNG, TIFF, BMP, WEBP, DOCX, XLSX, PPTX, TXT",
+            detail=f"File type not supported: {file.filename}. Allowed: PDF, JPG, PNG, TIFF, BMP, WEBP, DOCX, XLSX, PPTX, TXT, CSV",
         )
 
     doc_title = title or file.filename
@@ -58,14 +58,14 @@ async def upload_document(
     # Duplicate detection by file hash
     file_hash = file_info.get("file_hash", "")
     if file_hash:
-        existing = SupabaseDB.select("documents", filters={"organization_id": organization_id, "file_hash": file_hash})
+        existing = await asyncio.to_thread(SupabaseDB.select, "documents", filters={"organization_id": organization_id, "file_hash": file_hash})
         existing_data = getattr(existing, "data", existing if isinstance(existing, list) else [])
         if isinstance(existing_data, list) and existing_data:
             dup = existing_data[0] if isinstance(existing_data[0], dict) else {}
             old_file = dup.get("original_file_url", "")
             if old_file and not os.path.exists(old_file):
                 print(f"[UPLOAD] Old file missing on disk - deleting stale record and allowing re-upload")
-                SupabaseDB.delete_document_cascade(dup.get("id", ""))
+                await asyncio.to_thread(SupabaseDB.delete_document_cascade, dup.get("id", ""))
             else:
                 print(f"[UPLOAD] DUPLICATE DETECTED - already uploaded as '{dup.get('title', 'unknown')}'")
                 raise HTTPException(
