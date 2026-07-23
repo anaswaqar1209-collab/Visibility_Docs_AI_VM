@@ -72,7 +72,7 @@ PHASE3_AGENT_PROMPT_MAP = {
     "hr_agent": os.path.join("phase3", "hr_agent.md"),
     "legal_agent": os.path.join("phase3", "legal_agent.md"),
     "compliance_agent": os.path.join("phase3", "compliance_agent.md"),
-    "other_agent": os.path.join("phase3", "other.md"),
+    "other_agent": os.path.join("phase3", "super_other_agent.md"),
 
     # ── Finance Skills ──
     "invoice_search_agent": os.path.join("phase3", "finance", "invoice_search.md"),
@@ -139,6 +139,7 @@ DOCUMENT_TO_PHASE3_AGENT = {
     "missing_document": "missing_document_detection_agent",
 
     # ── Fallback ──
+    "presentation": "other_agent",
     "other": "other_agent",
 }
 
@@ -366,6 +367,7 @@ class ClassificationAgent:
 
         log = get_logger()
         log.info(f"Text: {len(text)} chars")
+
         prompt_template = _load_prompt("classification_agent.md")
         if not prompt_template:
             log.warn("No prompt template found, using heuristic fallback")
@@ -423,9 +425,19 @@ class CategoryExtractionAgent:
         agent = agent_type or DOCUMENT_TO_PHASE3_AGENT.get(document_type, "other_agent")
         log = get_logger()
         log.info(f"DocType: {document_type} | Text: {len(text)} chars")
-        prompt_template = _load_phase3_prompt(f"{agent}.md")
+        
+        prompt_rel_path = PHASE3_AGENT_PROMPT_MAP.get(agent)
+        if not prompt_rel_path:
+            log.warn(f"Agent '{agent}' not in PROMPT_MAP, falling back to other_agent")
+            prompt_rel_path = PHASE3_AGENT_PROMPT_MAP.get("other_agent")
+            
+        import os
+        from .agent_orchestrator import _load_prompt
+        # prompt_rel_path already contains "phase3/..." so we just load it relative to prompts dir
+        prompt_template = _load_prompt(prompt_rel_path)
+        
         if not prompt_template:
-            log.warn(f"No prompt found for agent '{agent}', returning empty")
+            log.warn(f"No prompt found for agent '{agent}' at {prompt_rel_path}, returning empty")
             return {"extracted_data": {}, "confidence": 0.0}
 
         prompt = prompt_template.replace("{text}", text[:64000] if text else "")

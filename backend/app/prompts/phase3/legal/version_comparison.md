@@ -88,3 +88,6 @@ You must output a valid JSON object matching the schema below. Do not wrap the J
   }
 }
 ```
+
+Document text:
+{text}

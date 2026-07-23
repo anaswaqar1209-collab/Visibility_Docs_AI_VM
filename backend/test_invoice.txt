@@ -1,0 +1,9 @@
+INVOICE
+
+Invoice Number: INV-9999
+Vendor: Apple Inc.
+Total: $1,200.00
+Date: 2026-07-22
+
+Items:
+1x Macbook Pro - $1200.00

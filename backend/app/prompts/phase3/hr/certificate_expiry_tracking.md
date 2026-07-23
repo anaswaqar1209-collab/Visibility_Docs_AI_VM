@@ -88,3 +88,6 @@ You must populate `page_number` and `source_text` for every certificate extracte
   ]
 }
 ```
+
+Document text:
+{text}

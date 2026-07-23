@@ -82,3 +82,6 @@ You must output a single JSON object strictly conforming to the following schema
   }
 }
 ```
+
+Document text:
+{text}

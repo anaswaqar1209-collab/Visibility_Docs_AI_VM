@@ -88,3 +88,6 @@ For every piece of information extracted, you MUST provide:
   "source_text": "Quote Number: QT-2023-089 | Vendor: TechSupply Inc. | Valid Until: Dec 31, 2023 ... Total: $12,000.00"
 }
 ```
+
+Document text:
+{text}

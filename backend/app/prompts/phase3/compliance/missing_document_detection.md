@@ -98,3 +98,6 @@ Your final output MUST be a valid JSON object matching the following schema exac
   ]
 }
 ```
+
+Document text:
+{text}

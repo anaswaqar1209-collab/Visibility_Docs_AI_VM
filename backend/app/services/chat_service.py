@@ -750,7 +750,16 @@ class ChatService:
             chat_log.llm_call("llama-3.3-70b-versatile", 0, len(question), 0)
             system_prompt = ""
             if resume_context:
-                system_prompt = "You are a Resume Screening assistant. Use the [Resume Rankings] block to answer ranking/comparison questions. Do not make up information."
+                system_prompt = (
+                    "You are a Resume Screening & Ranking assistant for Visibility Docs AI.\n\n"
+                    "Use the [Resume Rankings] and [Resume Details] blocks to answer questions.\n"
+                    "When asked to find the best CV or rank candidates:\n"
+                    "1. Rank by CV evaluation score (highest = best)\n"
+                    "2. Present a numbered ranking with name, score, key skills, experience\n"
+                    "3. Give a clear recommendation: WHO is the best and WHY\n"
+                    "4. Compare top candidates' strengths and weaknesses\n"
+                    "Do not make up information. Use only the data provided.\n"
+                )
             if is_first:
                 llm_t0 = time.time()
                 answer = conversation_service.chat(question, resume_context, session_id=sid,
@@ -852,24 +861,30 @@ class ChatService:
         resumes = []
         if is_resume_query:
             try:
-                resumes = document_service.list_documents(organization_id)
+                all_docs = document_service.list_documents(organization_id)
                 if resolved_ids:
                     resolved_set = set(resolved_ids)
-                    resumes = [r for r in resumes if r["id"] in resolved_set]
-                document_service._batch_attach_extractions(resumes, organization_id)
-                resumes = [r for r in resumes if r.get("cv_score") is not None]
+                    all_docs = [r for r in all_docs if r["id"] in resolved_set]
+                # Include ALL resume-type documents, not just those with cv_score
+                resumes = [r for r in all_docs if r.get("document_type") in ("resume", "transcript")]
+                if not resumes:
+                    # Fallback: check if any docs have cv_score attached
+                    document_service._batch_attach_extractions(all_docs, organization_id)
+                    resumes = [r for r in all_docs if r.get("cv_score") is not None]
+                else:
+                    document_service._batch_attach_extractions(resumes, organization_id)
                 resumes.sort(key=lambda x: x.get("cv_score", 0) or 0, reverse=True)
             except Exception:
                 resumes = []
             if resumes:
                 lines = ["[Resume Rankings (sorted by CV evaluation score)]"]
                 for i, r in enumerate(resumes[:20], 1):
-                    score_str = f"{r['cv_score']}/100" if r["cv_score"] is not None else "N/A"
-                    lines.append(f"{i}. {r['title']} — {score_str}")
+                    score_str = f"{r.get('cv_score', 0)}/100" if r.get("cv_score") is not None else "Not scored"
+                    lines.append(f"{i}. {r['title']} — Score: {score_str}")
                 resume_block = "\n".join(lines)
                 context = resume_block + "\n\n" + context if context else resume_block
                 chat_log.info(f"Injected {len(resumes)} resume scores into context")
-                # Also inject rich resume details (skills, experience, education, certs)
+                # Inject rich resume details (skills, experience, education, certs, evaluation)
                 res_doc_ids = [r["id"] for r in resumes if r.get("id")]
                 res_details = self._fetch_resume_details(res_doc_ids, organization_id)
                 if res_details:
@@ -983,10 +998,19 @@ class ChatService:
                         "If there are tables or diagrams in the context, explain what they show. "
                         "Do not make up information.\n"
                     )
-                    resume_rank_instruction = (
-                        "\nThe context may include a [Resume Rankings] block with CV evaluation scores. "
-                        "Use those scores to rank, compare, or recommend candidates when asked.\n"
-                    ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
+                    resume_rank_instruction = ""
+                    if is_resume_query and resumes:
+                        resume_rank_instruction = (
+                            "\n## Resume Ranking & Comparison\n"
+                            "The context includes [Resume Rankings] and [Resume Details] blocks.\n"
+                            "When the user asks to find the best CV, rank candidates, or compare resumes:\n"
+                            "1. Use the CV evaluation scores to rank candidates (highest = best)\n"
+                            "2. Present a clear comparison table or numbered list\n"
+                            "3. For each candidate: mention name, score, key skills, years of experience, education\n"
+                            "4. Give a clear recommendation: WHO is the best candidate and WHY\n"
+                            "5. Mention strengths and weaknesses of top candidates\n"
+                            "6. If scores are close, explain what differentiates them\n"
+                        )
                     qa_prompt += resume_rank_instruction
         except Exception:
             pass
@@ -1004,10 +1028,16 @@ class ChatService:
                     "Do not invent numbers.\n"
                 )
             else:
-                resume_rank_instruction = (
-                    "\nThe context may include a [Resume Rankings] block with CV evaluation scores. "
-                    "Use those scores to rank, compare, or recommend candidates when asked.\n"
-                ) if is_resume_query and any(r.get("cv_score") is not None for r in resumes) else ""
+                resume_rank_instruction = ""
+                if is_resume_query and resumes:
+                    resume_rank_instruction = (
+                        "\n## Resume Ranking & Comparison\n"
+                        "The context includes [Resume Rankings] and [Resume Details] blocks.\n"
+                        "When asked to find the best CV or rank candidates:\n"
+                        "1. Rank by CV evaluation score (highest = best)\n"
+                        "2. Present a clear comparison with name, score, key skills, experience\n"
+                        "3. Give a clear recommendation: WHO is the best and WHY\n"
+                    )
                 qa_prompt = (
                     f"You are the {agent_label} - a document Q&A assistant for Visibility Docs AI.\n\n"
                     "Answer naturally in the same language as the user's question. "

@@ -970,65 +970,132 @@ class RAGService:
             if invoice_chunks:
                 return invoice_chunks
 
-        chunks = _markdown_aware_chunk(text, max_words)
-        if chunks:
-            return chunks
+        # Parse text into atomic blocks (paragraphs, tables, lists, code)
+        blocks = _parse_atomic_blocks(text)
+        if not blocks:
+            return []
 
-        import re
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        sentences = [s.strip() for s in sentences if s.strip()]
-
-        if len(sentences) <= 1:
-            sentences = re.split(r'(?<=[,;:\u060C\u061F])\s+|\n+', text)
-            sentences = [s.strip() for s in sentences if s.strip()]
-
-        if len(sentences) <= 1 or len(sentences) >= 0.8 * len(text.split()):
-            words = text.split()
-            chunks = []
-            chunk_id = 0
-            for i in range(0, len(words), max_words):
-                chunk_words = words[i:i + max_words]
-                chunk_text = " ".join(chunk_words)
-                chunks.append({
-                    "content": chunk_text,
-                    "chunk_id": hashlib.md5(chunk_text.encode()).hexdigest(),
-                    "chunk_index": chunk_id,
-                    "word_count": len(chunk_words),
-                })
-                chunk_id += 1
-            return chunks
+        def recursive_split(content: str, separators: list[str], max_w: int) -> list[str]:
+            if len(content.split()) <= max_w:
+                return [content]
+            if not separators:
+                words = content.split()
+                return [" ".join(words[i:i+max_w]) for i in range(0, len(words), max_w)]
+                
+            sep = separators[0]
+            if sep == ".":
+                import re
+                splits = [s.strip() for s in re.split(r'(?<=\.)\s+', content) if s.strip()]
+            else:
+                splits = [s for s in content.split(sep) if s]
+                
+            good_splits = []
+            for s in splits:
+                if len(s.split()) <= max_w:
+                    good_splits.append(s)
+                else:
+                    good_splits.extend(recursive_split(s, separators[1:], max_w))
+            
+            merged = []
+            current = []
+            current_len = 0
+            join_str = " " if sep == "." else sep
+            for s in good_splits:
+                slen = len(s.split())
+                if current_len + slen > max_w and current:
+                    merged.append(join_str.join(current))
+                    current = [s]
+                    current_len = slen
+                else:
+                    current.append(s)
+                    current_len += slen
+            if current:
+                merged.append(join_str.join(current))
+            return merged
 
         chunks = []
-        current_chunk = []
-        current_word_count = 0
         chunk_id = 0
-
-        for sentence in sentences:
-            sentence_words = len(sentence.split())
-            if current_word_count + sentence_words > max_words and current_chunk:
-                chunk_text = " ".join(current_chunk)
-                chunks.append({
-                    "content": chunk_text,
-                    "chunk_id": hashlib.md5(chunk_text.encode()).hexdigest(),
-                    "chunk_index": chunk_id,
-                    "word_count": current_word_count,
-                })
-                chunk_id += 1
-                current_chunk = [sentence]
-                current_word_count = sentence_words
+        current_chunk_texts = []
+        current_words = 0
+        
+        for block in blocks:
+            b_words = block["words"]
+            b_type = block["type"]
+            b_content = block["content"]
+            
+            if b_type == "table":
+                # Never break tables
+                if current_words + b_words > max_words and current_chunk_texts:
+                    ct = "\n\n".join(current_chunk_texts)
+                    chunks.append({
+                        "content": ct,
+                        "chunk_id": hashlib.md5(ct.encode()).hexdigest(),
+                        "chunk_index": chunk_id,
+                        "word_count": current_words,
+                    })
+                    chunk_id += 1
+                    current_chunk_texts = []
+                    current_words = 0
+                    
+                if b_words > max_words and not current_chunk_texts:
+                    chunks.append({
+                        "content": b_content,
+                        "chunk_id": hashlib.md5(b_content.encode()).hexdigest(),
+                        "chunk_index": chunk_id,
+                        "word_count": b_words,
+                    })
+                    chunk_id += 1
+                else:
+                    current_chunk_texts.append(b_content)
+                    current_words += b_words
             else:
-                current_chunk.append(sentence)
-                current_word_count += sentence_words
+                if current_words + b_words > max_words:
+                    if current_chunk_texts:
+                        ct = "\n\n".join(current_chunk_texts)
+                        chunks.append({
+                            "content": ct,
+                            "chunk_id": hashlib.md5(ct.encode()).hexdigest(),
+                            "chunk_index": chunk_id,
+                            "word_count": current_words,
+                        })
+                        chunk_id += 1
+                        current_chunk_texts = []
+                        current_words = 0
+                        
+                    if b_words > max_words:
+                        splits = recursive_split(b_content, ["\n\n", "\n", ".", " "], max_words)
+                        for s in splits:
+                            slen = len(s.split())
+                            if current_words + slen > max_words and current_chunk_texts:
+                                ct = "\n\n".join(current_chunk_texts)
+                                chunks.append({
+                                    "content": ct,
+                                    "chunk_id": hashlib.md5(ct.encode()).hexdigest(),
+                                    "chunk_index": chunk_id,
+                                    "word_count": current_words,
+                                })
+                                chunk_id += 1
+                                current_chunk_texts = [s]
+                                current_words = slen
+                            else:
+                                current_chunk_texts.append(s)
+                                current_words += slen
+                    else:
+                        current_chunk_texts.append(b_content)
+                        current_words += b_words
+                else:
+                    current_chunk_texts.append(b_content)
+                    current_words += b_words
 
-        if current_chunk:
-            chunk_text = " ".join(current_chunk)
+        if current_chunk_texts:
+            ct = "\n\n".join(current_chunk_texts)
             chunks.append({
-                "content": chunk_text,
-                "chunk_id": hashlib.md5(chunk_text.encode()).hexdigest(),
+                "content": ct,
+                "chunk_id": hashlib.md5(ct.encode()).hexdigest(),
                 "chunk_index": chunk_id,
-                "word_count": current_word_count,
+                "word_count": current_words,
             })
-
+            
         return chunks
 
     def index_document(self, document_id: str, organization_id: str, text: str, file_path: str = None,
@@ -1350,6 +1417,7 @@ class RAGService:
             ae = embedding_service.embed_query(aq)
             alt_embeddings.append(ae)
         all_embeddings = [query_embedding] + alt_embeddings
+        all_queries = [query] + alt_queries
         if alt_queries:
             chat_log.info(f"Query expansion: {len(alt_queries)} alternatives")
 
@@ -1377,7 +1445,7 @@ class RAGService:
             print(f"[SEARCH] Querying Pinecone (ns='{organization_id}') with {len(all_embeddings)} embeddings, top_k={pinecone_top_k}...")
             for ei, emb in enumerate(all_embeddings):
                 tag = f"alt{ei}" if ei > 0 else "orig"
-                pr = pinecone_service.query(emb, top_k=pinecone_top_k, filter=pf, namespace=organization_id)
+                pr = pinecone_service.query(emb, top_k=pinecone_top_k, filter=pf, namespace=organization_id, query_text=all_queries[ei])
                 if pr:
                     print(f"[SEARCH] Pinecone [{tag}]: {len(pr)} results")
                     for r in pr:
@@ -1402,7 +1470,7 @@ class RAGService:
                         "document_title": title,
                         "document_type": dtype or meta.get("_document_type"),
                         "phase3_agent": p3a,
-                        "chunk_text": meta.get("chunk_text", "")[:3000],
+                        "chunk_text": meta.get("chunk_text", "")[:32000],
                         "page_number": meta.get("page_number"),
                         "heading": meta.get("heading"),
                         "section": meta.get("section"),
@@ -1443,7 +1511,7 @@ class RAGService:
                         "document_title": title,
                         "document_type": dtype,
                         "phase3_agent": p3a,
-                        "chunk_text": item.get("content", "")[:3000],
+                        "chunk_text": item.get("content", "")[:32000],
                         "page_number": item.get("page_id"),
                         "heading": item.get("heading"),
                         "section": item.get("section"),
@@ -1505,7 +1573,7 @@ class RAGService:
                             "document_title": title,
                             "document_type": dtype,
                             "phase3_agent": p3a,
-                            "chunk_text": item.get("content", "")[:3000],
+                            "chunk_text": item.get("content", "")[:32000],
                             "page_number": item.get("page_id"),
                             "heading": item.get("heading"),
                             "section": item.get("section"),

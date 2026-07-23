@@ -4,6 +4,11 @@ import base64
 import io
 import tempfile
 import logging
+import struct
+try:
+    import olefile
+except ImportError:
+    olefile = None
 from enum import Enum
 import fitz
 from PIL import Image
@@ -12,8 +17,10 @@ from .preprocessing_service import preprocessing_service
 
 try:
     import pytesseract
+    pytesseract.pytesseract.tesseract_cmd = '/opt/homebrew/bin/tesseract'
+    pytesseract.get_tesseract_version()
     TESSERACT_AVAILABLE = True
-except ImportError:
+except Exception:
     TESSERACT_AVAILABLE = False
 
 logger = logging.getLogger("visibility-docs")
@@ -52,11 +59,11 @@ def _is_image_ext(ext: str) -> bool:
 def detect_file_type(file_path: str) -> FileType:
     ext = os.path.splitext(file_path)[1].lower()
 
-    if ext == ".docx":
+    if ext in [".docx", ".doc"]:
         return FileType.DOCX
-    if ext == ".xlsx":
+    if ext in [".xlsx", ".xls"]:
         return FileType.XLSX
-    if ext == ".pptx":
+    if ext in [".pptx", ".ppt"]:
         return FileType.PPTX
     if ext in [".txt", ".csv"]:
         return FileType.TXT
@@ -186,9 +193,96 @@ def _extract_xlsx(file_path: str) -> str:
     return _normalize_markdown(result)
 
 
+def _extract_ppt_legacy(file_path: str) -> str:
+    """Extract text from legacy .ppt binary format using OLE container parsing."""
+    if olefile is None:
+        logger.warning("olefile not installed, cannot extract legacy .ppt")
+        return ""
+    try:
+        ole = olefile.OleFileIO(file_path)
+    except Exception as e:
+        logger.warning(f"Cannot open as OLE file: {e}")
+        return ""
+    
+    texts = []
+    
+    if ole.exists('PowerPoint Document'):
+        try:
+            data = ole.openstream('PowerPoint Document').read()
+            
+            def scan_records(data, start, end):
+                pos = start
+                while pos < end - 8:
+                    rec_ver_inst = struct.unpack_from('<H', data, pos)[0]
+                    rec_type = struct.unpack_from('<H', data, pos + 2)[0]
+                    rec_len = struct.unpack_from('<I', data, pos + 4)[0]
+                    is_container = (rec_ver_inst & 0xF) == 0xF
+                    
+                    if rec_len > end - pos - 8:
+                        break
+                    
+                    if rec_type == 4000:  # TextCharsAtom (UTF-16LE)
+                        try:
+                            t = data[pos+8:pos+8+rec_len].decode('utf-16-le', errors='ignore').strip()
+                            if t and len(t) > 1:
+                                texts.append(t)
+                        except Exception:
+                            pass
+                    elif rec_type == 4008:  # TextBytesAtom (ASCII)
+                        try:
+                            t = data[pos+8:pos+8+rec_len].decode('latin-1', errors='ignore').strip()
+                            if t and len(t) > 1:
+                                texts.append(t)
+                        except Exception:
+                            pass
+                    
+                    if is_container and rec_len > 0:
+                        scan_records(data, pos + 8, pos + 8 + rec_len)
+                    
+                    pos += 8 + rec_len
+            
+            scan_records(data, 0, len(data))
+        except Exception as e:
+            logger.warning(f"Error reading PowerPoint Document stream: {e}")
+    
+    ole.close()
+    
+    if not texts:
+        return ""
+    
+    # Clean: remove template/master-slide boilerplate, deduplicate
+    import re as _re
+    boilerplate = {'click to edit master title style', 'click to edit master text styles',
+                   'click to edit master subtitle style', 'second level', 'third level',
+                   'fourth level', 'fifth level'}
+    seen = set()
+    cleaned = []
+    for t in texts:
+        t = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', t)
+        t = t.replace('\r', '\n').strip()
+        if not t or len(t) < 2:
+            continue
+        if t.lower() in boilerplate:
+            continue
+        if t in seen:
+            continue
+        seen.add(t)
+        cleaned.append(t)
+    
+    return "\n\n".join(cleaned)
+
+
 def _extract_pptx(file_path: str) -> str:
-    from pptx import Presentation
-    prs = Presentation(file_path)
+    try:
+        from pptx import Presentation
+        prs = Presentation(file_path)
+    except Exception as e:
+        logger.warning(f"Could not open presentation (possibly legacy .ppt format): {e}")
+        fallback_text = _extract_ppt_legacy(file_path)
+        if fallback_text:
+            return _normalize_markdown(fallback_text)
+        return ""
+
     parts = []
     for slide_idx, slide in enumerate(prs.slides, 1):
         slide_texts = [f"--- Slide {slide_idx} ---"]
@@ -213,7 +307,7 @@ def _extract_pptx(file_path: str) -> str:
 
 
 def _page_to_image(page) -> str:
-    pix = page.get_pixmap(dpi=150)
+    pix = page.get_pixmap(dpi=150, alpha=False)
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     img = _preprocess_image(img)
     target_w = 768
@@ -265,19 +359,36 @@ def _vision_ocr(image_b64s: list[str]) -> str:
         content = [{"type": "text", "text": VISION_PROMPT}]
         for b64 in batch:
             content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-        try:
-            result = groq_service.chat_vision(
-                [{"role": "user", "content": content}],
-                temperature=0.0,
-                max_tokens=8192,
-            )
-            if result and not result.startswith("[Groq"):
-                texts.append(result)
-            else:
-                texts.append("")
-        except Exception as e:
-            logger.warning(f"Vision batch {i//batch_size + 1} failed: {e}")
-            texts.append("")
+
+        result = None
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                result = groq_service.chat_vision(
+                    [{"role": "user", "content": content}],
+                    temperature=0.0,
+                    max_tokens=8192,
+                )
+                if result and not result.startswith("[Groq"):
+                    texts.append(result)
+                    break
+                else:
+                    texts.append("")
+                    break
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "rate" in err_str or "limit" in err_str:
+                    wait_time = (attempt + 1) * 3
+                    logger.warning(f"Vision rate limited (attempt {attempt+1}/{max_retries}), waiting {wait_time}s...")
+                    import time
+                    time.sleep(wait_time)
+                    if attempt == max_retries - 1:
+                        logger.warning(f"Vision rate limit exhausted after {max_retries} retries")
+                        texts.append("")
+                else:
+                    logger.warning(f"Vision batch {i//batch_size + 1} failed: {e}")
+                    texts.append("")
+                    break
 
     return "\n\n".join(texts)
 

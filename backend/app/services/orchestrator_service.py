@@ -78,7 +78,7 @@ class OrchestratorService:
             raise FileNotFoundError("File path not found")
         import os
         if os.path.exists(fp):
-            return fp
+            return fp  # Local file found, return as-is (text extraction handles format)
         if fp.startswith("http"):
             import tempfile, urllib.request, urllib.parse
             # Safely quote the URL to handle spaces, without double-encoding existing %
@@ -100,8 +100,12 @@ class OrchestratorService:
             tmp.write(data)
             tmp.close()
             logger.info(f"Downloaded remote file to {tmp.name}")
-            return tmp.name
-        raise FileNotFoundError(f"File not found: {fp}")
+            fp = tmp.name
+        
+        if not os.path.exists(fp):
+            raise FileNotFoundError(f"File not found: {fp}")
+            
+        return fp
 
     def classify_only(self, document_id: str, organization_id: str) -> dict:
         log = reset_logger(document_id, doc_id=document_id)
@@ -182,6 +186,8 @@ class OrchestratorService:
                 "document_type": doc_type,
                 "phase3_agent": agent_type,
                 "language": classification.get("language", "en"),
+                "raw_text": raw_text,
+                "page_count": page_count,
                 "status": "classified",
             }, "id", document_id)
             self.update_stage(document_id, organization_id, "classified", 60, "completed")

@@ -43,7 +43,7 @@ async def upload_document(
         print(f"[UPLOAD] REJECTED - unsupported type: {file.filename}")
         raise HTTPException(
             status_code=400,
-            detail=f"File type not supported: {file.filename}. Allowed: PDF, JPG, PNG, TIFF, BMP, WEBP, DOCX, XLSX, PPTX, TXT, CSV",
+            detail=f"File type not supported: {file.filename}. Allowed: PDF, JPG, PNG, TIFF, BMP, WEBP, DOCX, DOC, XLSX, XLS, PPTX, PPT, TXT, CSV",
         )
 
     doc_title = title or file.filename

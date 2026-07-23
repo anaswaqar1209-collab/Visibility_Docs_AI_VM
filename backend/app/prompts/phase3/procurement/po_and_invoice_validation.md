@@ -106,3 +106,6 @@ For every piece of extracted data, you MUST maintain trace-ability:
   "source_text": "PO Total: $5,000.00 ... Invoice Total: $5,500.00"
 }
 ```
+
+Document text:
+{text}

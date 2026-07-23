@@ -97,3 +97,6 @@ You MUST provide the exact `page_number` and verbatim `source_text` for every si
   "onboarding_status": "INCOMPLETE"
 }
 ```
+
+Document text:
+{text}

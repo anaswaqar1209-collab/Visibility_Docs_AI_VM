@@ -70,3 +70,6 @@ Your final output MUST be a valid JSON object matching the following schema exac
   "responsible_person": "Jane Doe, CISO"
 }
 ```
+
+Document text:
+{text}

@@ -4,20 +4,43 @@ from enum import Enum
 
 
 class DocumentType(str, Enum):
+    # Finance
     INVOICE = "invoice"
-    PURCHASE_ORDER = "purchase_order"
-    CONTRACT = "contract"
-    QUOTATION = "quotation"
-    HR_DOCUMENT = "hr_document"
-    AUDIT_REPORT = "audit_report"
-    QUALITY_REPORT = "quality_report"
-    CERTIFICATE = "certificate"
-    MAINTENANCE_REPORT = "maintenance_report"
     FINANCIAL_STATEMENT = "financial_statement"
-    ENGINEERING_DRAWING = "engineering_drawing"
-    SOP = "sop"
+    DUPLICATE_INVOICE = "duplicate_invoice"
+    PAYMENT_TERMS = "payment_terms"
+    EXPENSE_REPORT = "expense_report"
+    
+    # Procurement
+    PURCHASE_ORDER = "purchase_order"
+    QUOTATION = "quotation"
+    SUPPLIER_AGREEMENT = "supplier_agreement"
+    
+    # Legal
+    CONTRACT = "contract"
+    CONTRACT_SUMMARY = "contract_summary"
+    CLAUSE_EXTRACTION = "clause_extraction"
+    RISK_DETECTION = "risk_detection"
+    VERSION_COMPARISON = "version_comparison"
+    
+    # HR
+    HR_DOCUMENT = "hr_document"
     RESUME = "resume"
     TRANSCRIPT = "transcript"
+    EMPLOYEE_CERTIFICATE = "employee_certificate"
+    EMPLOYMENT_CONTRACT = "employment_contract"
+    
+    # Compliance
+    CERTIFICATE = "certificate"
+    AUDIT_REPORT = "audit_report"
+    QUALITY_REPORT = "quality_report"
+    MAINTENANCE_REPORT = "maintenance_report"
+    SOP = "sop"
+    ENGINEERING_DRAWING = "engineering_drawing"
+    MISSING_DOCUMENT = "missing_document"
+    
+    # Fallback
+    PRESENTATION = "presentation"
     OTHER = "other"
 
 

@@ -183,3 +183,6 @@ You must map every value to its `page_number` and `source_text`. Failure to do s
   ]
 }
 ```
+
+Document text:
+{text}

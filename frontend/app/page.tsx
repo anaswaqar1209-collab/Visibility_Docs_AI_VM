@@ -38,7 +38,7 @@ function typeColor(t: string) {
     invoice: "badge-secondary", contract: "badge-primary",
     report: "badge-accent", resume: "badge-info",
     cv: "badge-info", transcript: "badge-accent",
-    other: "badge-ghost",
+    presentation: "badge-warning", other: "badge-ghost",
   };
   return m[t] || "badge-ghost";
 }
@@ -633,10 +633,22 @@ function UploadBox({ onUpload }: any) {
   const pendingIds = useRef<Set<string>>(new Set());
 
   const addFiles = (list: FileList) => {
-    const allowed = [".pdf",".jpg",".jpeg",".png",".tiff",".tif",".bmp",".webp",".docx",".xlsx",".pptx",".txt",".csv"];
+    const allowed = [".pdf",".jpg",".jpeg",".png",".tiff",".tif",".bmp",".webp",".docx",".doc",".xlsx",".xls",".pptx",".ppt",".txt",".csv"];
     const validFiles = Array.from(list).filter(f => {
+      if (f.name.indexOf(".") === -1) {
+        alert(`File ${f.name} has no extension. Please rename it to include .pptx or similar.`);
+        return false;
+      }
       const ext = f.name.substring(f.name.lastIndexOf(".")).toLowerCase();
-      return allowed.includes(ext);
+      if (!allowed.includes(ext)) {
+        alert(`File type not supported: ${f.name}`);
+        return false;
+      }
+      if (f.size > 50 * 1024 * 1024) {
+        alert(`File ${f.name} is too large. Maximum size is 50MB.`);
+        return false;
+      }
+      return true;
     });
     setFiles(prev => [...prev, ...validFiles].slice(0, 5));
   };
@@ -651,9 +663,16 @@ function UploadBox({ onUpload }: any) {
       fd.append("organization_id", orgId);
       try {
         const r = await authFetch(token, `${API}/api/v1/documents/upload`, { method: "POST", body: fd });
+        if (!r.ok) {
+          const errData = await r.json().catch(() => ({}));
+          alert(`Upload failed for ${files[i].name}: ${errData.detail || r.statusText}`);
+          continue;
+        }
         const data = await r.json();
         if (data?.id) ids.push(data.id);
-      } catch { }
+      } catch (err: any) { 
+        alert(`Network error uploading ${files[i].name}: ${err.message}`);
+      }
     }
     ids.forEach(id => pendingIds.current.add(id));
     onUpload?.();
@@ -689,7 +708,7 @@ function UploadBox({ onUpload }: any) {
         onClick={() => ref.current?.click()}
         className={`relative cursor-pointer rounded-xl border-2 border-dashed p-5 text-center transition-all duration-200
           ${drag ? "border-indigo-400 bg-indigo-50/50" : "border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30"}`}>
-        <input ref={ref} type="file" hidden multiple
+        <input ref={ref} type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png,.tiff,.tif,.bmp,.webp,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv"
           onChange={e => e.target.files && addFiles(e.target.files)} />
         <div className="flex flex-col items-center gap-1.5">
           <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center">

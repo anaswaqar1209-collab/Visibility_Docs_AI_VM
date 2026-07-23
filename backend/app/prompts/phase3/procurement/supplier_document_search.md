@@ -70,3 +70,6 @@ Every extracted attribute must be rooted in reality. You MUST provide:
   "source_text": "Supplier: Global Logistics Corp ... Minimum Order Quantity: 500 units ... SLA: 99.5% on-time delivery"
 }
 ```
+
+Document text:
+{text}
